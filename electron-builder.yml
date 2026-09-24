@@ -1,0 +1,49 @@
+appId: com.lumen.player
+productName: Lumen
+directories:
+  output: release
+files:
+  - out
+  - package.json
+extraResources:
+  - from: build/icon.png
+    to: icon.png
+asarUnpack:
+  - "**/ffmpeg-static/**"
+  - "**/koffi/**"
+  - "**/koffi-win32-x64/**"
+win:
+  executableName: Lumen
+  icon: build/icon.ico
+  target:
+    - nsis
+  signExecutable: false
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+fileAssociations:
+  - ext: mp4
+    name: Lumen.Video
+    description: Lumen video
+    role: Viewer
+  - ext: mkv
+    name: Lumen.Video
+    description: Lumen video
+    role: Viewer
+  - ext: mov
+    name: Lumen.Video
+    description: Lumen video
+    role: Viewer
+  - ext: webm
+    name: Lumen.Video
+    description: Lumen video
+    role: Viewer
+  - ext: m4v
+    name: Lumen.Video
+    description: Lumen video
+    role: Viewer
+  - ext: avi
+    name: Lumen.Video
+    description: Lumen video
+    role: Viewer
