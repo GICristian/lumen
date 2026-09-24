@@ -2,7 +2,7 @@ import { BrowserWindow, dialog, shell } from "electron";
 import type { ExportRequest, Settings } from "@shared/contracts";
 import { rememberFolder } from "@shared/folders";
 import { cancelExport, preparePlayback, previewClip, startExport, thumbnail } from "./ffmpeg";
-import { listDirectory, listFolder, videoArg } from "./library";
+import { deleteVideos, listDirectory, listFolder, videoArg } from "./library";
 import {
   applyLaunchOnStartup,
   beginOverlayDrag,
@@ -94,6 +94,11 @@ export function registerIpc(
     const listing = await listFolder(filePath);
     await remember(listing.folder);
     return listing;
+  });
+
+  ipcMain.handle("library:delete", (_event, paths: string[]) => {
+    if (!Array.isArray(paths)) return { deleted: [], failed: [] };
+    return deleteVideos(paths.filter((item) => typeof item === "string"));
   });
 
   ipcMain.handle("library:folder", async (_event, folderPath: string) => {

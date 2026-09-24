@@ -11,6 +11,8 @@ type CardProps = {
   onVisible: (path: string) => void;
   onHover: (path: string | null) => void;
   onOpen: (path: string) => void;
+  selected: boolean;
+  onSelect: (path: string, extend: boolean) => void;
 };
 
 function useSeen<T extends HTMLElement>(
@@ -139,17 +141,45 @@ function HoverVideo({ path }: { path: string }) {
   );
 }
 
-export function ClipCard({ item, poster, hot, onVisible, onHover, onOpen }: CardProps) {
+export function ClipCard({
+  item,
+  poster,
+  hot,
+  onVisible,
+  onHover,
+  onOpen,
+  selected,
+  onSelect,
+}: CardProps) {
   const { ref, seen } = useSeen<HTMLElement>(onVisible, item.path);
 
   return (
     <article
       ref={ref}
-      className={hot ? "clip-card is-hot" : "clip-card"}
+      className={
+        selected ? "clip-card is-selected" : hot ? "clip-card is-hot" : "clip-card"
+      }
       onMouseEnter={() => onHover(item.path)}
       onMouseLeave={() => onHover(null)}
-      onClick={() => onOpen(item.path)}
+      onClick={(event) => {
+        if (event.shiftKey || event.ctrlKey || event.metaKey) {
+          onSelect(item.path, event.shiftKey);
+          return;
+        }
+        onOpen(item.path);
+      }}
     >
+      <input
+        type="checkbox"
+        className="clip-check card-check"
+        checked={selected}
+        aria-label="Select clip"
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelect(item.path, event.shiftKey);
+        }}
+        onChange={() => undefined}
+      />
       <div className="clip-frame">
         <span className="clip-ratio" />
         <Poster poster={poster} path={item.path} seen={seen} />
@@ -173,9 +203,19 @@ type SideProps = {
   active: boolean;
   onVisible: (path: string) => void;
   onOpen: (path: string) => void;
+  selected: boolean;
+  onSelect: (path: string, extend: boolean) => void;
 };
 
-export function SideClip({ item, poster, active, onVisible, onOpen }: SideProps) {
+export function SideClip({
+  item,
+  poster,
+  active,
+  onVisible,
+  onOpen,
+  selected,
+  onSelect,
+}: SideProps) {
   const { ref, seen } = useSeen<HTMLButtonElement>(onVisible, item.path);
   const [hot, setHot] = useState(false);
 
@@ -183,11 +223,30 @@ export function SideClip({ item, poster, active, onVisible, onOpen }: SideProps)
     <button
       ref={ref}
       type="button"
-      className={active ? "side-clip is-on" : "side-clip"}
+      className={
+        selected ? "side-clip is-selected" : active ? "side-clip is-on" : "side-clip"
+      }
       onMouseEnter={() => setHot(true)}
       onMouseLeave={() => setHot(false)}
-      onClick={() => onOpen(item.path)}
+      onClick={(event) => {
+        if (event.shiftKey || event.ctrlKey || event.metaKey) {
+          onSelect(item.path, event.shiftKey);
+          return;
+        }
+        onOpen(item.path);
+      }}
     >
+      <input
+        type="checkbox"
+        className="clip-check"
+        checked={selected}
+        aria-label="Select clip"
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelect(item.path, event.shiftKey);
+        }}
+        onChange={() => undefined}
+      />
       <span className="side-thumb">
         <Poster poster={poster} path={item.path} seen={seen || active} />
         {hot ? <HoverVideo path={item.path} /> : null}

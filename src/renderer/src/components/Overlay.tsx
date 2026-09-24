@@ -7,7 +7,9 @@ import { acceleratorFromEvent } from "@shared/shortcut";
 import { fileName } from "../player/usePlayback";
 import { usePosters } from "../player/usePosters";
 import { ClipCard, SideClip } from "./ClipCard";
+import { DeleteClips } from "./DeleteClips";
 import { OverlayDetail } from "./OverlayDetail";
+import { useClipSelection } from "../player/useSelection";
 
 const emptySettings: Settings = {
   volume: 1,
@@ -43,6 +45,7 @@ export function OverlayApp() {
   const [capturing, setCapturing] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [toast, setToast] = useState<{ text: string; path?: string } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const loadFolder = useCallback(async (next: string) => {
     setFolder(next);
@@ -164,7 +167,28 @@ export function OverlayApp() {
       : settings.recentFolders;
   const labels = folderLabels(known);
   const visible = useMemo(() => sortClips(filterClips(items, query), sort), [items, query, sort]);
+  const order = useMemo(() => visible.map((item) => item.path), [visible]);
+  const selection = useClipSelection(order);
   const active = items.find((item) => item.path === playing);
+
+  async function removeSelected(): Promise<void> {
+    const paths = selection.selected;
+    if (paths.length === 0) return;
+    if (playing && paths.includes(playing)) setPlaying(null);
+    setConfirmDelete(false);
+    await new Promise((resolve) => window.setTimeout(resolve, 80));
+    try {
+      const result = await window.lumen.deleteClips(paths);
+      selection.clear();
+      const gone = new Set(result.deleted);
+      setItems((current) => current.filter((item) => !gone.has(item.path)));
+      if (result.failed.length > 0) {
+        setNotice(`${result.failed.length} clip${result.failed.length === 1 ? "" : "s"} could not be deleted`);
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Delete failed");
+    }
+  }
 
   return (
     <div className="overlay-shell">
@@ -232,6 +256,13 @@ export function OverlayApp() {
           <span className="overlay-count">
             {visible.length} {visible.length === 1 ? "clip" : "clips"}
           </span>
+          <DeleteClips
+            count={selection.selected.length}
+            pending={confirmDelete}
+            onAsk={() => setConfirmDelete(true)}
+            onConfirm={() => void removeSelected()}
+            onCancel={() => setConfirmDelete(false)}
+          />
         </div>
         {settingsOpen ? (
           <div className="overlay-settings">
@@ -261,8 +292,10 @@ export function OverlayApp() {
                   item={item}
                   poster={posters[item.path]}
                   active={item.path === active.path}
+                  selected={selection.selected.includes(item.path)}
                   onVisible={request}
                   onOpen={setPlaying}
+                  onSelect={selection.pick}
                 />
               ))}
             </aside>
@@ -311,9 +344,11 @@ export function OverlayApp() {
                   item={item}
                   poster={posters[item.path]}
                   hot={hoverPath === item.path}
+                  selected={selection.selected.includes(item.path)}
                   onVisible={request}
                   onHover={setHoverPath}
                   onOpen={setPlaying}
+                  onSelect={selection.pick}
                 />
               ))
             )}

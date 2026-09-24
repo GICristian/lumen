@@ -53,6 +53,7 @@ export type LumenApi = {
   openFile: () => Promise<string | null>;
   listFolder: (filePath: string) => Promise<FolderListing>;
   listDirectory: (folderPath: string) => Promise<FolderListing>;
+  deleteClips: (paths: string[]) => Promise<{ deleted: string[]; failed: string[] }>;
   openFolder: () => Promise<string | null>;
   toggleOverlay: () => void;
   hideOverlay: () => void;

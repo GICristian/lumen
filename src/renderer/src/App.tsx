@@ -8,12 +8,14 @@ import type { Probe } from "@shared/probe";
 import { setMark, type Marks } from "@shared/range";
 import { applySeek } from "@shared/seek";
 import { clampVolume, stepVolume } from "@shared/volume";
+import { DeleteClips } from "./components/DeleteClips";
 import { FolderList } from "./components/FolderList";
 import { Timeline } from "./components/Timeline";
 import { TitleBar } from "./components/TitleBar";
 import { Transport } from "./components/Transport";
 import { VideoStage, type VideoStageHandle } from "./components/VideoStage";
 import { fileName, formatClock, seekLabel, useChromeFade, useOsd } from "./player/usePlayback";
+import { useClipSelection } from "./player/useSelection";
 
 const unplayable = "This clip can't be played. You can still export it if ffmpeg can read it.";
 
@@ -50,6 +52,7 @@ export function App() {
   const [progress, setProgress] = useState<number | null>(null);
   const [scrubbing, setScrubbing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [overlayShortcut, setOverlayShortcut] = useState("Ctrl+Alt+L");
   const [osd, showOsd] = useOsd();
   const chrome = useChromeFade(playing);
@@ -104,6 +107,41 @@ export function App() {
 
   const loadRef = useRef(loadFile);
   loadRef.current = loadFile;
+  const selection = useClipSelection(items.map((item) => item.path));
+
+  async function removeSelected(): Promise<void> {
+    const paths = selection.selected;
+    if (paths.length === 0) return;
+    const video = videoRef.current;
+    if (video && currentPath && paths.includes(currentPath)) {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+      setPlayablePath(null);
+      setPlaying(false);
+    }
+    setConfirmDelete(false);
+    await new Promise((resolve) => window.setTimeout(resolve, 80));
+    try {
+      const result = await window.lumen.deleteClips(paths);
+      const gone = new Set(result.deleted);
+      selection.clear();
+      const rest = items.filter((item) => !gone.has(item.path));
+      setItems(rest);
+      if (currentPath && gone.has(currentPath)) {
+        setCurrentPath(null);
+        setPlayablePath(null);
+        window.lumen.setTitle("Lumen");
+      }
+      if (result.failed.length > 0) {
+        setBanner(
+          `${result.failed.length} clip${result.failed.length === 1 ? "" : "s"} could not be deleted`,
+        );
+      }
+    } catch (error) {
+      setBanner(error instanceof Error ? error.message : "Delete failed");
+    }
+  }
 
   function seekBy(direction: -1 | 1, fine: boolean): void {
     const dur = durationOf();
@@ -458,7 +496,18 @@ export function App() {
             items={items}
             currentPath={currentPath}
             thumbs={thumbs}
+            selected={selection.selected}
             onOpen={(file) => void loadFile(file)}
+            onSelect={selection.pick}
+            deleteSlot={
+              <DeleteClips
+                count={selection.selected.length}
+                pending={confirmDelete}
+                onAsk={() => setConfirmDelete(true)}
+                onConfirm={() => void removeSelected()}
+                onCancel={() => setConfirmDelete(false)}
+              />
+            }
           />
         ) : null}
         <div className="stage">

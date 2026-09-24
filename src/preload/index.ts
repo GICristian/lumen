@@ -23,6 +23,7 @@ const api: LumenApi = {
   openFile: () => ipcRenderer.invoke("dialog:open"),
   listFolder: (filePath) => ipcRenderer.invoke("library:list", filePath),
   listDirectory: (folderPath) => ipcRenderer.invoke("library:folder", folderPath),
+  deleteClips: (paths) => ipcRenderer.invoke("library:delete", paths),
   openFolder: () => ipcRenderer.invoke("dialog:folder"),
   toggleOverlay: () => ipcRenderer.send("overlay:toggle"),
   hideOverlay: () => ipcRenderer.send("overlay:hide"),

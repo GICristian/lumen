@@ -195,11 +195,55 @@ button, input { font: inherit; color: inherit; }
 }
 
 .folder-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 14px 16px 8px;
   color: var(--muted);
   font-size: 12px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
+}
+
+.folder-head .text-btn,
+.delete-bar .text-btn {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.text-btn.is-danger { color: #ff8d8d; }
+
+.delete-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 13px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.clip-check {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.card-check {
+  position: absolute;
+  z-index: 3;
+  top: 10px;
+  left: 10px;
+}
+
+.clip-card { position: relative; }
+
+.clip-card.is-selected,
+.side-clip.is-selected {
+  border-color: rgba(92, 225, 255, 0.7);
 }
 
 .folder-list { overflow: auto; padding: 0 8px 12px; }
