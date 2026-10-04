@@ -1,7 +1,12 @@
+import { createRequire } from "node:module";
 import { app, BrowserWindow, ipcMain } from "electron";
-import { autoUpdater } from "electron-updater";
+import type { AppUpdater } from "electron-updater";
 import type { UpdateState } from "@shared/contracts";
 import { idleUpdate } from "@shared/update";
+
+const { autoUpdater } = createRequire(import.meta.url)("electron-updater") as {
+  autoUpdater: AppUpdater;
+};
 
 let state: UpdateState = idleUpdate;
 let installing = false;

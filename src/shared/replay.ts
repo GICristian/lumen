@@ -129,10 +129,16 @@ export function buildMixSaveArgs(
   return args;
 }
 
-function mediaTail(copy: boolean, encoder: string, output: string, audioBitrate = "160k"): string[] {
+function mediaTail(
+  copy: boolean, encoder: string, output: string, audioBitrate = "160k", rebase = false,
+): string[] {
   const args: string[] = [];
-  if (copy) args.push("-c:v", "copy");
-  else args.push(...encodeVideoArgs(encoder));
+  if (copy) {
+    args.push("-c:v", "copy");
+    if (rebase) args.push("-bsf:v", "setts=pts=PTS-STARTPTS:dts=DTS-STARTPTS");
+  } else {
+    args.push(...encodeVideoArgs(encoder));
+  }
   args.push("-c:a", "aac", "-b:a", audioBitrate, "-ar", "48000", "-movflags", "+faststart", output);
   return args;
 }
@@ -159,7 +165,7 @@ export function buildFileSaveArgs(
   args.push("-i", input);
   if (duration !== undefined && Number.isFinite(duration) && duration > 0) args.push("-t", duration.toFixed(6));
   args.push("-af", gainFilter("aresample=48000", systemGain));
-  args.push(...mediaTail(copy, encoder, output, "256k"));
+  args.push(...mediaTail(copy, encoder, output, "256k", true));
   return args;
 }
 
@@ -193,7 +199,7 @@ export function buildFileMixSaveArgs(
   const mix = `[0:a]${system}[sys];[1:a]${micChain}[mic];`
     + "[sys][mic]amix=inputs=2:duration=first:normalize=0:dropout_transition=0[aout]";
   args.push("-filter_complex", mix, "-map", "0:v:0", "-map", "[aout]");
-  args.push(...mediaTail(copy, encoder, output, "256k"));
+  args.push(...mediaTail(copy, encoder, output, "256k", true));
   return args;
 }
 

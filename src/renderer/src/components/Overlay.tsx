@@ -24,6 +24,7 @@ const emptySettings: Settings = {
   folderOpen: true,
   libraryPinned: false,
   windowBounds: null,
+  windowMaximized: true,
   lastFolder: null,
   recentFolders: [],
   overlayAccelerator: "Ctrl+Alt+L",

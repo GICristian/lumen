@@ -14,6 +14,7 @@ export const defaultSettings: Settings = {
   folderOpen: false,
   libraryPinned: false,
   windowBounds: null,
+  windowMaximized: true,
   lastFolder: null,
   recentFolders: [],
   overlayAccelerator: "Ctrl+Alt+L",
@@ -68,6 +69,7 @@ export function normalizeSettings(raw: Partial<Settings> | null): Settings {
     folderOpen: raw?.folderOpen === true,
     libraryPinned: raw?.libraryPinned === true,
     windowBounds: boundsOk(raw?.windowBounds) ? raw.windowBounds : null,
+    windowMaximized: raw?.windowMaximized !== false,
     lastFolder:
       typeof raw?.lastFolder === "string" && raw.lastFolder.trim() ? raw.lastFolder : null,
     recentFolders: rememberFolder(

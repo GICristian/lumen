@@ -14,6 +14,13 @@ const MIMES = ["video/webm;codecs=h264,opus", "video/webm;codecs=vp8,opus", "vid
 const MIC_MIMES = ["audio/webm;codecs=opus", "audio/webm"];
 const SYSTEM_AUDIO_BITS = 320_000;
 
+function trace(step: string, detail?: unknown): void {
+  const extra = detail instanceof Error
+    ? { name: detail.name, message: detail.message, stack: detail.stack?.split("\n")[1]?.trim() }
+    : detail;
+  console.error(`[replay] ${step}${extra === undefined ? "" : ` ${JSON.stringify(extra)}`}`);
+}
+
 function openRecorder(stream: MediaStream, mime: string, videoBits: number, audioBits: number): MediaRecorder {
   return new MediaRecorder(stream, {
     ...(mime ? { mimeType: mime } : {}),
@@ -31,8 +38,8 @@ function pullBlob(recorder: MediaRecorder): Promise<Blob> {
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => {
       recorder.removeEventListener("dataavailable", onData);
-      reject(new Error("Capture stalled."));
-    }, 5000);
+      reject(new Error("Capture produced no frames."));
+    }, 8000);
     const onData = (event: BlobEvent): void => {
       if (!event.data.size) return;
       window.clearTimeout(timer);
@@ -83,14 +90,34 @@ export function ReplayCapture() {
       signal.addEventListener("abort", release, { once: true });
       try {
         const requested = replayDimensions(options.sourceWidth, options.sourceHeight, options.height);
-        display = await navigator.mediaDevices.getDisplayMedia({
-          video: {
-            width: { ideal: requested.width },
-            height: { ideal: requested.height },
-            frameRate: options.fps,
-          },
-          audio: options.systemAudio ? systemAudioConstraints() : false,
-        });
+        const openScreen = (withAudio: boolean, limitRate: boolean): Promise<MediaStream> => (
+          navigator.mediaDevices.getDisplayMedia({
+            video: {
+              width: { ideal: requested.width },
+              height: { ideal: requested.height },
+              ...(limitRate ? { frameRate: options.fps } : {}),
+            },
+            audio: withAudio ? systemAudioConstraints() : false,
+          })
+        );
+        trace("open-screen", { audio: options.systemAudio, fps: options.fps, height: options.height });
+        try {
+          display = await openScreen(options.systemAudio, true);
+          trace("open-screen-ok", { tracks: display.getTracks().map((track) => track.kind) });
+        } catch (error) {
+          trace("open-screen-failed", error);
+          if (signal.aborted) throw error;
+          await new Promise((resolve) => { window.setTimeout(resolve, 700); });
+          if (signal.aborted) throw error;
+          try {
+            trace("open-screen-retry");
+            display = await openScreen(false, false);
+            trace("open-screen-retry-ok", { tracks: display.getTracks().map((track) => track.kind) });
+          } catch (retryError) {
+            trace("open-screen-retry-failed", retryError);
+            throw error;
+          }
+        }
         if (signal.aborted) return;
         const video = display.getVideoTracks()[0];
         if (!video) throw new Error("No screen to capture.");
@@ -105,13 +132,12 @@ export function ReplayCapture() {
           native.width || requested.width, native.height || requested.height, options.height,
         );
         const constraints: MediaTrackConstraints & { resizeMode: string } = {
-          frameRate: { ideal: options.fps, max: options.fps },
+          frameRate: { ideal: options.fps },
           width: { ideal: sized.width, max: sized.width },
           height: { ideal: sized.height, max: sized.height },
           resizeMode: "crop-and-scale",
         };
-        await video.applyConstraints(constraints);
-        video.contentHint = "motion";
+        try { await video.applyConstraints(constraints); } catch { /* keep the size the capturer already opened */ }
         if (signal.aborted) return;
         const tracks: MediaStreamTrack[] = [video];
         const system = options.systemAudio ? display.getAudioTracks()[0] : undefined;
@@ -133,7 +159,7 @@ export function ReplayCapture() {
             if (!voiceTrack) throw new Error("No microphone.");
             if (system) {
               if (options.micHum) {
-                context = new AudioContext({ latencyHint: "interactive" });
+                context = new AudioContext({ latencyHint: "playback" });
                 const dest = context.createMediaStreamDestination();
                 humFilter(context, context.createMediaStreamSource(mic)).connect(dest);
                 await context.resume();
@@ -142,7 +168,7 @@ export function ReplayCapture() {
               voiceStream = new MediaStream([voiceTrack]);
               micOn = true;
             } else {
-              context = new AudioContext({ latencyHint: "interactive" });
+              context = new AudioContext({ latencyHint: "playback" });
               const dest = context.createMediaStreamDestination();
               const gain = context.createGain();
               gain.gain.value = options.micGain;
@@ -180,10 +206,12 @@ export function ReplayCapture() {
         let lastCut = performance.now();
         let videoHeaderSent = false;
         let micHeaderSent = false;
+        let videoClusterMs = 0;
         let chain: Promise<void> = Promise.resolve();
         let timer = 0;
         const fail = (error: unknown): void => {
           if (!signal.aborted) {
+            trace("cut-failed", error);
             window.lumen.replayCaptureFailed(error instanceof Error ? error.message : "Replay failed.");
           }
           controller.abort();
@@ -198,8 +226,9 @@ export function ReplayCapture() {
           const endedAt = performance.timeOrigin + performance.now();
           lastCut = performance.now();
           if (signal.aborted) return;
-          const picture = splitWebmChunk(new Uint8Array(await pictureBlob.arrayBuffer()));
+          const picture = splitWebmChunk(new Uint8Array(await pictureBlob.arrayBuffer()), videoClusterMs);
           if (!picture) throw new Error("Capture produced an unreadable segment.");
+          videoClusterMs = picture.clusterMs;
           const headerBytes = !videoHeaderSent && picture.init ? copyBytes(picture.init) : undefined;
           if (headerBytes) videoHeaderSent = true;
           let micBytes: Uint8Array | undefined;
@@ -211,6 +240,7 @@ export function ReplayCapture() {
             if (micHeaderBytes) micHeaderSent = true;
             micBytes = copyBytes(voice.cluster);
           }
+          trace("segment", { bytes: picture.cluster.byteLength, mic: micBytes?.byteLength ?? 0 });
           await window.lumen.replaySegment({
             sessionId: options.sessionId,
             bytes: copyBytes(picture.cluster),

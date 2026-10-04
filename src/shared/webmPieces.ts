@@ -62,9 +62,23 @@ function encodeSize(size: number): Uint8Array {
   ]);
 }
 
-/** Puts a run of blocks under a cluster whose timecode is 0, so block times stay put. */
-function wrapBlocks(blocks: Uint8Array): Uint8Array {
-  const timecode = new Uint8Array([0xE7, 0x81, 0x00]);
+/** Cluster timecode element. Block deltas are added to this value. */
+function encodeTimecode(milliseconds: number): Uint8Array {
+  const value = Math.max(0, Math.round(milliseconds));
+  if (value < 0x80) return new Uint8Array([0xE7, 0x81, value]);
+  if (value < 0x4000) return new Uint8Array([0xE7, 0x82, value >> 8, value & 0xFF]);
+  if (value < 0x200000) {
+    return new Uint8Array([0xE7, 0x83, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF]);
+  }
+  return new Uint8Array([
+    0xE7, 0x84,
+    (value >> 24) & 0xFF, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF,
+  ]);
+}
+
+/** Puts a run of blocks under a cluster so their deltas stay on `milliseconds`. */
+function wrapBlocks(blocks: Uint8Array, milliseconds = 0): Uint8Array {
+  const timecode = encodeTimecode(milliseconds);
   const payload = timecode.length + blocks.length;
   const size = encodeSize(payload);
   const out = new Uint8Array(4 + size.length + payload);
@@ -87,32 +101,79 @@ function joinParts(parts: Uint8Array[]): Uint8Array {
 }
 
 /**
- * Later audio slices are SimpleBlocks with no Cluster. Video slices already
- * start with a header or a cluster and are left untouched.
+ * A video slice often starts with blocks from the previous cluster, then a new
+ * cluster. Those blocks keep the previous cluster time. A microphone slice is
+ * only blocks and stays on timecode 0, where its own deltas already live.
  */
-function withClusters(bytes: Uint8Array): Uint8Array {
+function withClusters(bytes: Uint8Array, previousClusterMs: number): Uint8Array {
   const first = element(bytes, 0, bytes.length);
   if (!first || !isMediaBlock(first.id)) return bytes;
   let at = 0;
   while (at < bytes.length) {
     const item = element(bytes, at, bytes.length);
     if (!item || !isMediaBlock(item.id) || item.end <= at) break;
-    if (item.unknown) return wrapBlocks(bytes);
+    if (item.unknown) return wrapBlocks(bytes, previousClusterMs);
     at = item.end;
   }
-  if (at === 0) return wrapBlocks(bytes);
-  const parts = [wrapBlocks(bytes.subarray(0, at))];
+  if (at === 0) return wrapBlocks(bytes, previousClusterMs);
+  const parts = [wrapBlocks(bytes.subarray(0, at), previousClusterMs)];
   if (at < bytes.length) parts.push(bytes.subarray(at));
   return joinParts(parts);
 }
 
+function timecodeMs(bytes: Uint8Array, cluster: Element): number | null {
+  const cap = Math.min(cluster.end, cluster.start + 16);
+  let pos = cluster.start;
+  while (pos < cap) {
+    const field = element(bytes, pos, cap);
+    if (!field || field.end <= pos) break;
+    if (field.id === 0xE7) {
+      let value = 0;
+      for (let i = field.start; i < field.end; i++) value = value * 256 + bytes[i];
+      return value;
+    }
+    pos = field.end;
+  }
+  return null;
+}
+
+/** Last cluster timecode in the buffer, in milliseconds. */
+export function lastClusterTimecodeMs(bytes: Uint8Array): number {
+  let last = 0;
+  const walk = (start: number, limit: number): void => {
+    let pos = start;
+    while (pos < limit) {
+      const item = element(bytes, pos, limit);
+      if (!item || item.end <= pos) break;
+      if (item.id === 0x18538067 || item.id === 0x1F43B675) {
+        if (item.id === 0x1F43B675) {
+          const ms = timecodeMs(bytes, item);
+          if (ms !== null) last = ms;
+        }
+        walk(item.start, item.end);
+      }
+      pos = item.end;
+    }
+  };
+  walk(0, bytes.length);
+  return last;
+}
+
+export type WebmSplit = {
+  init: Uint8Array | null;
+  cluster: Uint8Array;
+  /** Last cluster timecode in this slice, in milliseconds. */
+  clusterMs: number;
+};
+
 /** Header bytes, if this chunk still has one, and the cluster bytes that follow. */
-export function splitWebmChunk(bytes: Uint8Array): { init: Uint8Array | null; cluster: Uint8Array } | null {
-  const normalized = withClusters(bytes);
+export function splitWebmChunk(bytes: Uint8Array, previousClusterMs = 0): WebmSplit | null {
+  const normalized = withClusters(bytes, previousClusterMs);
   const offset = findClusterOffset(normalized);
   if (offset === null) return null;
-  if (offset === 0) return { init: null, cluster: normalized };
-  return { init: normalized.subarray(0, offset), cluster: normalized.subarray(offset) };
+  const cluster = offset === 0 ? normalized : normalized.subarray(offset);
+  const init = offset === 0 ? null : normalized.subarray(0, offset);
+  return { init, cluster, clusterMs: lastClusterTimecodeMs(cluster) };
 }
 
 /** TimecodeScale from the Info header. MediaRecorder uses 1 ms. */

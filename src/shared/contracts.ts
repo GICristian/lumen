@@ -9,6 +9,7 @@ export type Settings = {
   folderOpen: boolean;
   libraryPinned: boolean;
   windowBounds: { x: number; y: number; width: number; height: number } | null;
+  windowMaximized: boolean;
   lastFolder: string | null;
   recentFolders: string[];
   overlayAccelerator: string;

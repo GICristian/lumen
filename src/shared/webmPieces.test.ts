@@ -64,6 +64,23 @@ describe("webm pieces", () => {
     expect(clusterStartSeconds(split!.cluster.subarray(split!.cluster.byteLength - cluster.byteLength))).toBe(4);
   });
 
+  it("keeps leading video blocks on the previous cluster clock", () => {
+    const blocks = new Uint8Array([0xA3, 0x84, 0x81, 0x04, 0xB0, 0x80]);
+    const cluster = new Uint8Array([
+      0x1F, 0x43, 0xB6, 0x75, 0x87,
+      0xE7, 0x82, 0x13, 0x88,
+      0xA3, 0x81, 0x00,
+    ]);
+    const mixed = new Uint8Array(blocks.byteLength + cluster.byteLength);
+    mixed.set(blocks);
+    mixed.set(cluster, blocks.byteLength);
+    const split = splitWebmChunk(mixed, 4000);
+    expect(clusterStartSeconds(split!.cluster)).toBe(4);
+    expect(split?.clusterMs).toBe(5000);
+    const follow = split!.cluster.byteLength - cluster.byteLength;
+    expect(clusterStartSeconds(split!.cluster.subarray(follow))).toBe(5);
+  });
+
   it("splits a real file back into a playable recording", async () => {
     if (!ffmpeg) throw new Error("FFmpeg is required");
     const dir = await mkdtemp(path.join(tmpdir(), "lumen-webm-"));

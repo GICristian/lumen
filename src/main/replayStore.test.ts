@@ -96,5 +96,7 @@ describe("replay settings migration", () => {
     expect(normalizeSettings({ replayAutoStart: false }).replayAutoStart).toBe(false);
     expect(normalizeSettings({ replaySeconds: 5000, replayMicGain: Infinity, replayBitrateKbps: -100 }).replaySeconds).toBe(900);
     expect(normalizeSettings({ replayMicGain: Infinity }).replayMicGain).toBe(1);
+    expect(normalizeSettings(null).windowMaximized).toBe(true);
+    expect(normalizeSettings({ windowMaximized: false }).windowMaximized).toBe(false);
   });
 });

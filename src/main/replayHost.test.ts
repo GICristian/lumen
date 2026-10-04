@@ -44,7 +44,7 @@ vi.mock("electron", async () => {
     isDestroyed() { return this.destroyed; }
     destroy() { this.destroyed = true; this.emit("closed"); }
     setIgnoreMouseEvents() {} setContentProtection() {} hookWindowMessage() {} setAlwaysOnTop() {}
-    setVisibleOnAllWorkspaces() {} showInactive() {} setBounds() {}
+    setVisibleOnAllWorkspaces() {} showInactive() {} hide() {} isVisible() { return true; } setBounds() {}
   }
   const display = { id: 1, bounds: { x: 0, y: 0, width: 1920, height: 1080 }, scaleFactor: 1 };
   return { BrowserWindow: Window, ipcMain: Object.assign(ipc, { handle: (channel: string, fn: (...args: any[]) => any) => harness.handlers.set(channel, fn) }),

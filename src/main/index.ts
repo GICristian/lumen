@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, protocol } from "electron";
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { mediaFileResponse } from "./mediaFile";
@@ -11,6 +12,33 @@ import { getSettings, initSettings, patchSettings } from "./settings";
 import { initUpdates } from "./updates";
 
 app.commandLine.appendSwitch("enable-features", "PlatformHEVCDecoderSupport");
+
+const RELAUNCH_TASK = "LumenUser";
+
+function runningElevated(): boolean {
+  if (process.platform !== "win32") return false;
+  const result = spawnSync("net", ["session"], { stdio: "ignore", windowsHide: true });
+  return result.status === 0;
+}
+
+/** Windows denies screen capture to an administrator process. Start as the user. */
+function relaunchAtUserLevel(): boolean {
+  const exe = process.execPath;
+  spawnSync("schtasks", ["/Delete", "/TN", RELAUNCH_TASK, "/F"], { stdio: "ignore", windowsHide: true });
+  const created = spawnSync("schtasks", [
+    "/Create", "/TN", RELAUNCH_TASK, "/TR", `"${exe}"`,
+    "/SC", "ONCE", "/ST", "00:00", "/RL", "LIMITED", "/F",
+  ], { stdio: "ignore", windowsHide: true });
+  if (created.status !== 0) return false;
+  const ran = spawnSync("schtasks", ["/Run", "/TN", RELAUNCH_TASK], { stdio: "ignore", windowsHide: true });
+  return ran.status === 0;
+}
+
+const handingOff = runningElevated() && relaunchAtUserLevel();
+if (handingOff) app.exit(0);
+else if (process.platform === "win32") {
+  spawnSync("schtasks", ["/Delete", "/TN", RELAUNCH_TASK, "/F"], { stdio: "ignore", windowsHide: true });
+}
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -47,12 +75,14 @@ function showHub(): void {
 }
 
 function queueBoundsSave(): void {
-  if (!mainWindow) return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMaximized() || mainWindow.isFullScreen()) return;
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    if (!mainWindow) return;
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMaximized()) return;
     const bounds = mainWindow.getBounds();
-    void patchSettings({ windowBounds: bounds });
+    if (bounds.x < 0 || bounds.y < 0) return;
+    void patchSettings({ windowBounds: bounds, windowMaximized: false });
   }, 300);
 }
 
@@ -62,12 +92,14 @@ function createWindow(forceShow = false): void {
     return;
   }
   const startHidden = process.argv.includes("--hidden") && !videoArg(process.argv) && !forceShow;
-  const bounds = getSettings().windowBounds;
+  const settings = getSettings();
+  const bounds = settings.windowBounds;
+  const restored = bounds && bounds.x >= 0 && bounds.y >= 0 ? bounds : null;
   const win = new BrowserWindow({
-    x: bounds?.x,
-    y: bounds?.y,
-    width: bounds?.width ?? 1280,
-    height: bounds?.height ?? 800,
+    x: settings.windowMaximized ? undefined : restored?.x,
+    y: settings.windowMaximized ? undefined : restored?.y,
+    width: restored?.width ?? 1280,
+    height: restored?.height ?? 800,
     minWidth: 960,
     minHeight: 600,
     frame: false,
@@ -86,6 +118,18 @@ function createWindow(forceShow = false): void {
   mainWindow = win;
   win.on("resize", queueBoundsSave);
   win.on("move", queueBoundsSave);
+  win.on("maximize", () => {
+    void patchSettings({ windowMaximized: true });
+  });
+  win.on("unmaximize", () => {
+    if (win.isDestroyed()) return;
+    const next = win.getBounds();
+    const patch: { windowMaximized: false; windowBounds?: typeof next } = {
+      windowMaximized: false,
+    };
+    if (next.x >= 0 && next.y >= 0) patch.windowBounds = next;
+    void patchSettings(patch);
+  });
   win.on("close", (event) => {
     if (quitting) return;
     event.preventDefault();
@@ -100,7 +144,12 @@ function createWindow(forceShow = false): void {
   win.on("leave-full-screen", () => {
     win.webContents.send("window:fullscreen", false);
   });
-  if (!startHidden) win.once("ready-to-show", () => win.show());
+  if (!startHidden) {
+    win.once("ready-to-show", () => {
+      if (getSettings().windowMaximized) win.maximize();
+      win.show();
+    });
+  }
   win.webContents.on("console-message", (event) => {
     if (event.message) console.log("renderer:", event.message);
   });
@@ -115,8 +164,10 @@ function createWindow(forceShow = false): void {
   }
 }
 
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
+const gotLock = handingOff ? false : app.requestSingleInstanceLock();
+if (handingOff) {
+  // The user-level process is the one that keeps running.
+} else if (!gotLock) {
   app.quit();
 } else {
   app.on("second-instance", (_event, argv) => {

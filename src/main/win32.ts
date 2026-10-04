@@ -1,4 +1,5 @@
 import koffi from "koffi";
+import { coversDisplay, type PixelDisplay } from "@shared/displayCover";
 
 const user32 = koffi.load("user32.dll");
 const kernel32 = koffi.load("kernel32.dll");
@@ -216,6 +217,22 @@ export function restoreForeground(): void {
   const target = takeForeground();
   if (target === null) return;
   focusWindow(target);
+}
+
+/** True when another app is borderless or exclusive on one of these monitors. */
+export function foregroundCovers(displays: PixelDisplay[]): boolean {
+  try {
+    const hwnd = asHwnd(getForegroundWindow());
+    if (hwnd === 0n) return false;
+    const pid = [0];
+    getWindowThreadProcessId(hwnd, pid);
+    if (pid[0] === process.pid) return false;
+    const rect = windowRect(hwnd);
+    if (!rect) return false;
+    return displays.some((display) => coversDisplay(rect, display));
+  } catch {
+    return false;
+  }
 }
 
 function windowRect(hwnd: bigint): Rect | null {

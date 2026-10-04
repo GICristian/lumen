@@ -26,6 +26,7 @@ import {
 } from "@shared/replay";
 import { clusterStartSeconds, timecodeScaleNs } from "@shared/webmPieces";
 import { showReplayToast, dismissReplayToast } from "./replayToast";
+import { replayLog } from "./replayLog";
 import { ReplayStore } from "./replayStore";
 import { ffmpegBinary } from "./ffmpeg";
 import {
@@ -38,12 +39,14 @@ import {
   setTrayTooltip,
   withOverlayRelaxed,
 } from "./overlayHost";
+import { foregroundCovers } from "./win32";
 import { getSettings, patchSettings } from "./settings";
 import { indicatorBounds, RECORDING_INDICATOR_HTML } from "@shared/recordingIndicator";
 
 let bufferDir = "";
 let capture: BrowserWindow | null = null;
 let dot: BrowserWindow | null = null;
+let dotTimer: NodeJS.Timeout | null = null;
 let store: ReplayStore;
 let ready = false;
 let captureWidth = 0;
@@ -114,18 +117,37 @@ function publish(): void {
   const payload = status();
   setTrayRecording(armed);
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send("replay:status", payload);
+    if (win.isDestroyed()) continue;
+    if (typeof win.isVisible === "function" && !win.isVisible()) continue;
+    win.webContents.send("replay:status", payload);
   }
 }
 
 function anchorDot(): void {
-  if (!dot || dot.isDestroyed()) return;
+  if (!dot || dot.isDestroyed() || !dot.isVisible()) return;
   const display = screen.getDisplayMatching(dot.getBounds());
   const area = display.workArea ?? display.bounds;
   dot.setBounds(indicatorBounds(area));
 }
 
+function gameCoversScreen(): boolean {
+  return foregroundCovers(screen.getAllDisplays().map((display) => display.bounds));
+}
+
+function placeDot(): void {
+  if (!dot || dot.isDestroyed()) return;
+  if (gameCoversScreen()) {
+    if (dot.isVisible()) dot.hide();
+    return;
+  }
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  dot.setBounds(indicatorBounds(display.workArea ?? display.bounds));
+  if (!dot.isVisible()) dot.showInactive();
+}
+
 function hideDot(): void {
+  if (dotTimer) clearInterval(dotTimer);
+  dotTimer = null;
   screen.removeListener("display-metrics-changed", anchorDot);
   if (dot && !dot.isDestroyed()) dot.destroy();
   dot = null;
@@ -163,12 +185,10 @@ function showDot(): void {
     void dot.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(RECORDING_INDICATOR_HTML)}`);
     screen.removeListener("display-metrics-changed", anchorDot);
     screen.on("display-metrics-changed", anchorDot);
-  } else {
-    dot.setBounds(bounds);
   }
-  dot.setAlwaysOnTop(true, "screen-saver");
-  dot.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  dot.showInactive();
+  dot.setAlwaysOnTop(true, "floating");
+  placeDot();
+  if (!dotTimer) dotTimer = setInterval(placeDot, 800);
 }
 
 function codecLabel(codec: string): string {
@@ -225,13 +245,21 @@ async function ensureCapture(): Promise<BrowserWindow> {
     },
   });
   capture = win;
+  win.webContents.on("console-message", (event) => {
+    const entry = event as { level?: string | number; message?: string; lineNumber?: number };
+    const level = String(entry.level ?? "");
+    if (level !== "error" && level !== "warning" && level !== "2" && level !== "3") return;
+    replayLog("console", `${level} ${entry.message ?? ""}:${entry.lineNumber ?? 0}`);
+  });
   win.on("closed", () => {
+    replayLog("capture-closed");
     if (capture === win) {
       capture = null;
       if (armed) fail("Capture closed unexpectedly. Start replay to resume buffering.");
     }
   });
-  win.webContents.on("render-process-gone", () => {
+  win.webContents.on("render-process-gone", (_event, details) => {
+    replayLog("capture-gone", details);
     if (capture === win && armed) fail("Capture stopped unexpectedly. Start replay to resume buffering.");
   });
   const dev = process.env.ELECTRON_RENDERER_URL;
@@ -397,6 +425,7 @@ async function freePath(filePath: string): Promise<string> {
 }
 
 function fail(message: string): void {
+  replayLog("fail", message);
   armed = false;
   ready = false;
   tellCapture("replay:capture-stop");
@@ -584,21 +613,41 @@ async function requestSave(requestedAt?: unknown): Promise<ReplayStatus> {
 }
 
 function installCaptureHandler(): void {
-  session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    const asked = request as { videoRequested?: boolean; audioRequested?: boolean };
     const point = screen.getCursorScreenPoint();
-    const display = screen.getAllDisplays().find((item) => item.id === captureDisplayId) ?? screen.getDisplayNearestPoint(point);
+    const display = screen.getAllDisplays().find((item) => item.id === captureDisplayId)
+      ?? screen.getDisplayNearestPoint(point);
+    replayLog("display-request", {
+      video: asked.videoRequested,
+      audio: asked.audioRequested,
+      displayId: display.id,
+    });
     void desktopCapturer.getSources({
       types: ["screen"],
       thumbnailSize: { width: 0, height: 0 },
     }).then((sources) => {
       const match = sources.find((source) => source.display_id === String(display.id))
         ?? sources[0];
+      replayLog("sources", sources.map((source) => ({
+        id: source.id,
+        display: source.display_id,
+        name: source.name,
+      })));
       if (!match) {
+        replayLog("display-callback", "empty");
         callback({});
         return;
       }
-      callback({ video: match, ...(getSettings().replaySystemAudio ? { audio: "loopback" as const } : {}) });
-    }).catch(() => callback({}));
+      const audio = asked.audioRequested === false
+        ? undefined
+        : (getSettings().replaySystemAudio ? "loopback" as const : undefined);
+      replayLog("display-callback", { id: match.id, display: match.display_id, audio: audio ?? "off" });
+      callback({ video: match, ...(audio ? { audio } : {}) });
+    }).catch((error: unknown) => {
+      replayLog("sources-failed", error instanceof Error ? error.message : String(error));
+      callback({});
+    });
   }, { useSystemPicker: false });
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(permission === "media" || permission === "display-capture");
@@ -629,8 +678,8 @@ export function initReplay(dir: string): void {
     console.error("replay shortcut unavailable", settings.replayAccelerator);
   }
 
-  ipcMain.handle("replay:segment", async (event, segment: ReplaySegment) => {
-    if (!armed || !isCapture(event.sender.id)) return;
+  const takeSegment = async (senderId: number, segment: ReplaySegment): Promise<void> => {
+    if (!armed || !isCapture(senderId)) return;
     if (!segment || segment.sessionId !== store.sessionId || !(segment.bytes instanceof Uint8Array)) return;
     writeQueue = writeQueue.catch(() => undefined).then(async () => {
       if (segment.bytes.length > 0) {
@@ -649,7 +698,8 @@ export function initReplay(dir: string): void {
       publish();
     });
     try { await writeQueue; } catch { fail("Replay stopped because its temporary buffer could not be written."); }
-  });
+  };
+  ipcMain.handle("replay:segment", (event, segment: ReplaySegment) => takeSegment(event.sender.id, segment));
   ipcMain.on(
     "replay:capture-ready",
     (event, info: ReplayCaptureInfo) => {
@@ -664,6 +714,7 @@ export function initReplay(dir: string): void {
     publish();
   });
   ipcMain.on("replay:capture-failed", (event, message: unknown) => {
+    replayLog("capture-failed", { fromCapture: isCapture(event.sender.id), message });
     if (!isCapture(event.sender.id)) return;
     fail(typeof message === "string" && message.trim() ? message : "Replay failed.");
   });
@@ -728,6 +779,7 @@ export function initReplay(dir: string): void {
     publish();
     return status();
   });
+  replayLog("ready", { autoStart: settings.replayAutoStart, pid: process.pid });
   if (settings.replayAutoStart) void serialize(arm).catch((error) => {
     fail(error instanceof Error ? error.message : "Automatic replay could not start.");
     showReplayToast(true);
