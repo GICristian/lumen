@@ -101,9 +101,9 @@ function joinParts(parts: Uint8Array[]): Uint8Array {
 }
 
 /**
- * A video slice often starts with blocks from the previous cluster, then a new
- * cluster. Those blocks keep the previous cluster time. A microphone slice is
- * only blocks and stays on timecode 0, where its own deltas already live.
+ * A slice often starts with blocks from the previous cluster, then a new
+ * cluster. Those blocks keep the previous cluster time. Their deltas are not
+ * absolute, so a microphone slice uses that same previous clock.
  */
 function withClusters(bytes: Uint8Array, previousClusterMs: number): Uint8Array {
   const first = element(bytes, 0, bytes.length);
@@ -204,6 +204,159 @@ export function timecodeScaleNs(init: Uint8Array): number {
     at = item.end;
   }
   return 1_000_000;
+}
+
+function openHeader(
+  bytes: Uint8Array,
+  at: number,
+  limit: number,
+): { id: number; start: number; end: number } | null {
+  if (at >= limit || bytes[at] === 0) return null;
+  let idSize = 1;
+  while (idSize <= 4 && !(bytes[at] & (0x80 >> (idSize - 1)))) idSize++;
+  if (idSize > 4 || at + idSize >= limit) return null;
+  let id = 0;
+  for (let i = 0; i < idSize; i++) id = id * 256 + bytes[at++];
+  let sizeWidth = 1;
+  while (sizeWidth <= 8 && at < limit && !(bytes[at] & (0x80 >> (sizeWidth - 1)))) sizeWidth++;
+  if (sizeWidth > 8 || at + sizeWidth > limit) return null;
+  const dataBits = 8 - sizeWidth;
+  const dataMask = dataBits === 0 ? 0 : (1 << dataBits) - 1;
+  let unknown = (bytes[at] & dataMask) === dataMask;
+  let size = bytes[at] & dataMask;
+  at++;
+  for (let i = 1; i < sizeWidth; i++) {
+    const byte = bytes[at++];
+    if (byte !== 0xFF) unknown = false;
+    size = size * 256 + byte;
+  }
+  if (at > limit) return null;
+  const end = unknown ? limit : at + size;
+  return { id, start: at, end };
+}
+
+function blockDeltaMs(bytes: Uint8Array, start: number, limit: number): number | null {
+  if (start >= limit) return null;
+  let width = 1;
+  while (width <= 4 && !(bytes[start] & (0x80 >> (width - 1)))) width++;
+  if (width > 4 || start + width + 2 > limit) return null;
+  const relAt = start + width;
+  const rel = (bytes[relAt] << 8) | bytes[relAt + 1];
+  return rel & 0x8000 ? rel - 0x10000 : rel;
+}
+
+function secondsOf(milliseconds: number, scaleNs: number): number {
+  const seconds = milliseconds * scaleNs / 1_000_000_000;
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : 0;
+}
+
+function blockPayload(bytes: Uint8Array, start: number, limit: number): number | null {
+  let width = 1;
+  while (width <= 4 && start < limit && !(bytes[start] & (0x80 >> (width - 1)))) width++;
+  const payload = start + width + 3;
+  return width > 4 || payload > limit ? null : payload;
+}
+
+/** SPS or IDR. Frames before it reference a picture the save no longer has. */
+function hasPictureStart(bytes: Uint8Array, start: number, end: number): boolean {
+  const last = Math.min(end, bytes.length) - 4;
+  for (let i = start; i < last; i++) {
+    const four = bytes[i] === 0 && bytes[i + 1] === 0 && bytes[i + 2] === 0 && bytes[i + 3] === 1;
+    const three = !four && bytes[i] === 0 && bytes[i + 1] === 0 && bytes[i + 2] === 1;
+    if (!four && !three) continue;
+    const kind = bytes[i + (four ? 4 : 3)] & 0x1F;
+    if (kind === 7 || kind === 5) return true;
+  }
+  return false;
+}
+
+/**
+ * Timestamp of the first audio or video sample. The cluster base can be
+ * seconds older than that sample, and the microphone's base is not the picture's.
+ */
+export function firstSampleSeconds(bytes: Uint8Array, scaleNs = 1_000_000): number {
+  const offset = findClusterOffset(bytes);
+  if (offset === null) return 0;
+  const cluster = openHeader(bytes, offset, bytes.length);
+  if (!cluster) return 0;
+  const limit = Math.min(cluster.end, bytes.length);
+  let tc = 0;
+  let pos = cluster.start;
+  while (pos < limit) {
+    const field = openHeader(bytes, pos, limit);
+    if (!field || field.start <= pos) break;
+    if (field.id === 0xE7 && pos < cluster.start + 24) {
+      tc = 0;
+      for (let i = field.start; i < Math.min(field.end, limit); i++) tc = tc * 256 + bytes[i];
+    }
+    if (field.id === 0xA3 || field.id === 0xA1 || field.id === 0xA0) {
+      const delta = blockDeltaMs(bytes, field.start, limit);
+      if (delta === null) break;
+      return secondsOf(tc + delta, scaleNs);
+    }
+    const step = Math.min(field.end, limit);
+    if (step <= pos) break;
+    pos = step;
+  }
+  return secondsOf(tc, scaleNs);
+}
+
+/**
+ * Timestamp of the first frame a player can actually show. Earlier slices are
+ * only delta frames, and dropping them without the microphone leaves the sound behind.
+ */
+export function firstKeyframeSeconds(bytes: Uint8Array, scaleNs = 1_000_000): number {
+  const visit = (start: number, limit: number): number => {
+    let tc = 0;
+    let pos = start;
+    while (pos < limit) {
+      const item = openHeader(bytes, pos, limit);
+      if (!item || item.start <= pos) break;
+      if (item.id === 0x18538067) {
+        const found = visit(item.start, Math.min(item.end, limit));
+        if (found > 0) return found;
+      } else if (item.id === 0x1F43B675) {
+        const clusterEnd = Math.min(item.end, limit);
+        let cursor = item.start;
+        while (cursor < clusterEnd) {
+          const field = openHeader(bytes, cursor, clusterEnd);
+          if (!field || field.start <= cursor) break;
+          if (field.id === 0xE7 && cursor < item.start + 24) {
+            tc = 0;
+            for (let i = field.start; i < Math.min(field.end, clusterEnd); i++) {
+              tc = tc * 256 + bytes[i];
+            }
+          }
+          if (field.id === 0xA3 || field.id === 0xA1 || field.id === 0xA0) {
+            const delta = blockDeltaMs(bytes, field.start, clusterEnd);
+            const payload = blockPayload(bytes, field.start, clusterEnd);
+            const payloadEnd = Math.min(field.end, clusterEnd);
+            if (
+              delta !== null && payload !== null
+              && hasPictureStart(bytes, payload, payloadEnd)
+            ) {
+              return secondsOf(tc + delta, scaleNs);
+            }
+          }
+          const next = Math.min(field.end, clusterEnd);
+          if (next <= cursor) break;
+          cursor = next;
+        }
+      }
+      const step = Math.min(item.end, limit);
+      if (step <= pos) break;
+      pos = step;
+    }
+    return 0;
+  };
+  return visit(0, bytes.length);
+}
+
+/** One seek for both files, so a later cluster base cannot delay the microphone. */
+export function sharedMediaStart(videoSeconds: number, micSeconds: number): number {
+  const present = [videoSeconds, micSeconds].filter((value) => value > 0.001);
+  if (present.length === 0) return 0;
+  return Math.min(...present);
 }
 
 /** Where this cluster sits on the recorder clock, in seconds. */

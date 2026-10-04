@@ -13,6 +13,12 @@ import {
   progressFromChunk,
   type Probe,
 } from "@shared/probe";
+import {
+  bufferLooksLikeAv1,
+  stillAttempts,
+  thumbGrabArgs,
+  type ThumbDecoder,
+} from "@shared/thumbs";
 
 const CACHE_LIMIT = 2 * 1024 * 1024 * 1024;
 const emptyProbe: Probe = {
@@ -170,18 +176,34 @@ export function thumbnail(
   return job;
 }
 
+const HEADER_SCAN = 64 * 1024;
+
+async function videoDecoder(filePath: string): Promise<ThumbDecoder> {
+  try {
+    const handle = await fs.open(filePath, "r");
+    try {
+      const buffer = Buffer.alloc(HEADER_SCAN);
+      const { bytesRead } = await handle.read(buffer, 0, HEADER_SCAN, 0);
+      const header = buffer.subarray(0, bytesRead);
+      return bufferLooksLikeAv1(header) ? "av1_cuvid" : "software";
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return "software";
+  }
+}
+
 async function grabFrame(
   filePath: string,
   output: string,
   seek: string,
   accurate: boolean,
+  decoder: ThumbDecoder,
+  timeoutMs: number,
 ): Promise<boolean> {
-  const args = ["-y"];
-  if (!accurate) args.push("-ss", seek);
-  args.push("-i", filePath);
-  if (accurate) args.push("-ss", seek);
-  args.push("-frames:v", "1", "-an", "-vf", "scale=480:-2", "-q:v", "4", output);
-  const result = await run(args, 20000);
+  const args = thumbGrabArgs(filePath, output, seek, accurate, decoder);
+  const result = await run(args, timeoutMs);
   if (result.code !== 0) {
     await fs.rm(output, { force: true });
     return false;
@@ -198,12 +220,31 @@ async function grabFrame(
   return true;
 }
 
+async function writeStill(
+  filePath: string,
+  output: string,
+  duration: number | null,
+): Promise<boolean> {
+  const decoder = await videoDecoder(filePath);
+  for (const attempt of stillAttempts(duration, decoder)) {
+    const wrote = await grabFrame(
+      filePath,
+      output,
+      attempt.seek,
+      attempt.accurate,
+      attempt.decoder,
+      attempt.timeoutMs,
+    );
+    if (wrote) return true;
+  }
+  return false;
+}
+
 /** One still from a local file. The caller deletes the jpeg. */
 export async function capturePoster(filePath: string, output: string): Promise<boolean> {
   try {
     await fs.mkdir(path.dirname(output), { recursive: true });
-    if (await grabFrame(filePath, output, "1", false)) return true;
-    return await grabFrame(filePath, output, "0", false);
+    return await writeStill(filePath, output, null);
   } catch (error) {
     console.error("poster failed", filePath, error);
     return false;
@@ -224,15 +265,7 @@ async function makeThumbnail(
     } catch {
       // Generate a new frame.
     }
-    const first = duration !== null && duration < 1 ? "0" : "1";
-    const attempts: Array<[string, boolean]> = [
-      [first, false],
-      ["0", false],
-      [first, true],
-    ];
-    for (const [seek, accurate] of attempts) {
-      if (await grabFrame(filePath, output, seek, accurate)) return output;
-    }
+    if (await writeStill(filePath, output, duration)) return output;
     return null;
   } catch (error) {
     console.error("thumbnail failed", filePath, error);

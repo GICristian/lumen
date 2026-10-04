@@ -82,19 +82,14 @@ export function FolderList({
     const head = headRef.current;
     return () => { window.removeEventListener("pointerdown", close); head?.removeEventListener("keydown", escape); };
   }, [folderMenuOpen]);
-  const [seenPaths, setSeenPaths] = useState<Set<string>>(() => new Set());
   useEffect(() => {
     const root = listRef.current;
     if (!root) return;
-    setSeenPaths(new Set());
     const observer = new IntersectionObserver((entries) => {
       for (const entry of entries) {
         if (!entry.isIntersecting) continue;
         const filePath = (entry.target as HTMLElement).dataset.videoPath;
-        if (filePath) {
-          onVisible(filePath);
-          setSeenPaths((current) => current.has(filePath) ? current : new Set(current).add(filePath));
-        }
+        if (filePath) onVisible(filePath);
       }
     }, { root, rootMargin: "180px 0px" });
     root.querySelectorAll<HTMLElement>("[data-video-path]").forEach((row) => observer.observe(row));
@@ -168,7 +163,7 @@ export function FolderList({
               }}
             >
               <ClipCheck checked={picked} onPick={(extend) => onSelect(item.path, extend)} />
-              <span className="folder-thumb"><Poster poster={posters[item.path]} path={item.path} seen={seenPaths.has(item.path)} /></span>
+              <span className="folder-thumb"><Poster poster={posters[item.path]} /></span>
               <span className="folder-labels">
                 <span className="folder-name" title={item.name}>{item.name}</span>
                 <span className="folder-meta">{formatWhen(item.mtimeMs)} · {formatBytes(item.sizeBytes)}</span>

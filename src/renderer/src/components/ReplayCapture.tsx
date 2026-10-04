@@ -90,19 +90,19 @@ export function ReplayCapture() {
       signal.addEventListener("abort", release, { once: true });
       try {
         const requested = replayDimensions(options.sourceWidth, options.sourceHeight, options.height);
-        const openScreen = (withAudio: boolean, limitRate: boolean): Promise<MediaStream> => (
+        const openScreen = (withAudio: boolean): Promise<MediaStream> => (
           navigator.mediaDevices.getDisplayMedia({
             video: {
               width: { ideal: requested.width },
               height: { ideal: requested.height },
-              ...(limitRate ? { frameRate: options.fps } : {}),
+              frameRate: { ideal: options.fps, max: options.fps },
             },
             audio: withAudio ? systemAudioConstraints() : false,
           })
         );
         trace("open-screen", { audio: options.systemAudio, fps: options.fps, height: options.height });
         try {
-          display = await openScreen(options.systemAudio, true);
+          display = await openScreen(options.systemAudio);
           trace("open-screen-ok", { tracks: display.getTracks().map((track) => track.kind) });
         } catch (error) {
           trace("open-screen-failed", error);
@@ -111,7 +111,7 @@ export function ReplayCapture() {
           if (signal.aborted) throw error;
           try {
             trace("open-screen-retry");
-            display = await openScreen(false, false);
+            display = await openScreen(false);
             trace("open-screen-retry-ok", { tracks: display.getTracks().map((track) => track.kind) });
           } catch (retryError) {
             trace("open-screen-retry-failed", retryError);
@@ -132,12 +132,14 @@ export function ReplayCapture() {
           native.width || requested.width, native.height || requested.height, options.height,
         );
         const constraints: MediaTrackConstraints & { resizeMode: string } = {
-          frameRate: { ideal: options.fps },
+          frameRate: { ideal: options.fps, max: options.fps },
           width: { ideal: sized.width, max: sized.width },
           height: { ideal: sized.height, max: sized.height },
           resizeMode: "crop-and-scale",
         };
-        try { await video.applyConstraints(constraints); } catch { /* keep the size the capturer already opened */ }
+        try { await video.applyConstraints(constraints); } catch { /* keep the size already opened */ }
+        video.contentHint = "motion";
+        trace("track", { ...video.getSettings(), hint: video.contentHint });
         if (signal.aborted) return;
         const tracks: MediaStreamTrack[] = [video];
         const system = options.systemAudio ? display.getAudioTracks()[0] : undefined;
@@ -207,6 +209,7 @@ export function ReplayCapture() {
         let videoHeaderSent = false;
         let micHeaderSent = false;
         let videoClusterMs = 0;
+        let micClusterMs = 0;
         let chain: Promise<void> = Promise.resolve();
         let timer = 0;
         const fail = (error: unknown): void => {
@@ -234,8 +237,12 @@ export function ReplayCapture() {
           let micBytes: Uint8Array | undefined;
           let micHeaderBytes: Uint8Array | undefined;
           if (voiceBlob) {
-            const voice = splitWebmChunk(new Uint8Array(await voiceBlob.arrayBuffer()));
+            const voice = splitWebmChunk(
+              new Uint8Array(await voiceBlob.arrayBuffer()),
+              micClusterMs,
+            );
             if (!voice) throw new Error("Microphone produced an unreadable segment.");
+            micClusterMs = voice.clusterMs;
             micHeaderBytes = !micHeaderSent && voice.init ? copyBytes(voice.init) : undefined;
             if (micHeaderBytes) micHeaderSent = true;
             micBytes = copyBytes(voice.cluster);

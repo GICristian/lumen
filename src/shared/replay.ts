@@ -147,9 +147,15 @@ function gainFilter(base: string, gain: number): string {
   return Math.abs(gain - 1) < 0.001 ? base : `${base},volume=${gain.toFixed(3)}`;
 }
 
+/** Drop the audio that plays before the first frame a player can show. */
+function pictureLead(start: number, chain: string): string {
+  if (start <= 0.001) return chain;
+  return `atrim=start=${start.toFixed(3)},asetpts=PTS-STARTPTS,${chain}`;
+}
+
 /**
- * One continuous recording. `start` skips clusters that the ring already dropped.
- * `micLeadMs` > 0 means the microphone file is ahead of the picture.
+ * One continuous recording. `start` is how long the sound runs before the first
+ * decodable frame. `micLeadMs` > 0 means the microphone file is ahead of the picture.
  */
 export function buildFileSaveArgs(
   input: string,
@@ -160,11 +166,9 @@ export function buildFileSaveArgs(
   start = 0,
   systemGain = 1,
 ): string[] {
-  const args = ["-hide_banner", "-loglevel", "error", "-nostdin", "-y"];
-  if (start > 0.001) args.push("-ss", start.toFixed(3));
-  args.push("-i", input);
+  const args = ["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", input];
   if (duration !== undefined && Number.isFinite(duration) && duration > 0) args.push("-t", duration.toFixed(6));
-  args.push("-af", gainFilter("aresample=48000", systemGain));
+  args.push("-af", gainFilter(pictureLead(start, "aresample=48000"), systemGain));
   args.push(...mediaTail(copy, encoder, output, "256k", true));
   return args;
 }
@@ -183,19 +187,15 @@ export function buildFileMixSaveArgs(
   micStart = 0,
   micLeadMs = 0,
 ): string[] {
-  const args = ["-hide_banner", "-loglevel", "error", "-nostdin", "-y"];
-  if (videoStart > 0.001) args.push("-ss", videoStart.toFixed(3));
-  args.push("-i", video);
-  if (micStart > 0.001) args.push("-ss", micStart.toFixed(3));
-  args.push("-i", mic);
+  const args = ["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", video, "-i", mic];
   if (duration !== undefined && Number.isFinite(duration) && duration > 0) args.push("-t", duration.toFixed(6));
   const shift = Math.max(-500, Math.min(500, micLeadMs));
   const voice: string[] = [];
   if (shift > 1) voice.push(`adelay=${Math.round(shift)}|${Math.round(shift)}`);
   if (shift < -1) voice.push(`atrim=start=${(-shift / 1000).toFixed(3)}`, "asetpts=PTS-STARTPTS");
   voice.push("aresample=48000");
-  const system = gainFilter("aresample=48000", systemGain);
-  const micChain = gainFilter(voice.join(","), micGain);
+  const system = gainFilter(pictureLead(videoStart, "aresample=48000"), systemGain);
+  const micChain = gainFilter(pictureLead(micStart, voice.join(",")), micGain);
   const mix = `[0:a]${system}[sys];[1:a]${micChain}[mic];`
     + "[sys][mic]amix=inputs=2:duration=first:normalize=0:dropout_transition=0[aout]";
   args.push("-filter_complex", mix, "-map", "0:v:0", "-map", "[aout]");

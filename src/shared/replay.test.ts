@@ -54,8 +54,9 @@ describe("save", () => {
     const aheadText = ahead.join(" ");
     expect(aheadText).toContain("adelay=40|40");
     expect(aheadText).toContain("normalize=0");
-    expect(ahead).toContain("12.000");
-    expect(ahead).toContain("11.960");
+    expect(aheadText).toContain("atrim=start=12.000");
+    expect(aheadText).toContain("atrim=start=11.960");
+    expect(aheadText).not.toContain("-ss");
     const behind = buildFileMixSaveArgs("v.webm", "m.webm", "out.mp4", false, 8, "libx264", 1, 1, 0, 0, -30);
     expect(behind.join(" ")).toContain("atrim=start=0.030");
     expect(behind.join(" ")).not.toContain("adelay=");

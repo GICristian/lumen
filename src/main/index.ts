@@ -12,6 +12,9 @@ import { getSettings, initSettings, patchSettings } from "./settings";
 import { initUpdates } from "./updates";
 
 app.commandLine.appendSwitch("enable-features", "PlatformHEVCDecoderSupport");
+// The capture window stays hidden, so its renderer must keep the full frame rate.
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
 
 const RELAUNCH_TASK = "LumenUser";
 

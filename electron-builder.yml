@@ -18,6 +18,7 @@ asarUnpack:
   - "**/koffi-win32-x64/**"
 win:
   executableName: Lumen
+  artifactName: Lumen-Setup-${version}.${ext}
   icon: build/icon.ico
   target:
     - nsis

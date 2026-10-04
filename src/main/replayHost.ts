@@ -24,7 +24,7 @@ import {
   replayHeight,
   replayGain, replayBitrate, replayDevice,
 } from "@shared/replay";
-import { clusterStartSeconds, timecodeScaleNs } from "@shared/webmPieces";
+import { firstKeyframeSeconds, firstSampleSeconds, timecodeScaleNs } from "@shared/webmPieces";
 import { showReplayToast, dismissReplayToast } from "./replayToast";
 import { replayLog } from "./replayLog";
 import { ReplayStore } from "./replayStore";
@@ -336,17 +336,6 @@ async function assemble(initPath: string, parts: string[], dest: string): Promis
   }
 }
 
-async function readPrefix(file: string, count: number): Promise<Uint8Array> {
-  const handle = await fs.open(file, "r");
-  try {
-    const buf = Buffer.alloc(count);
-    const { bytesRead } = await handle.read(buf, 0, count, 0);
-    return buf.subarray(0, bytesRead);
-  } finally {
-    await handle.close();
-  }
-}
-
 function spawnFfmpeg(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     let proc;
@@ -520,14 +509,17 @@ async function saveReplay(cutoff: number, sessionId: string): Promise<void> {
       joinedVideo = path.join(bufferDir, "joined.webm");
       await assemble(store.videoHeader, files, joinedVideo);
       const scale = timecodeScaleNs(new Uint8Array(await fs.readFile(store.videoHeader)));
-      const videoStart = clusterStartSeconds(await readPrefix(files[0], 256), scale);
-      let micStart = 0;
+      const opening = new Uint8Array(await fs.readFile(files[0]));
+      const firstPicture = firstSampleSeconds(opening, scale);
+      const keyframe = firstKeyframeSeconds(opening, scale);
+      const gap = keyframe - firstPicture;
+      const lead = firstPicture > 0.001 && gap > 0.001 && gap < 8 ? gap : 0;
       if (mix && store.micHeader) {
         joinedMic = path.join(bufferDir, "joined.mic.webm");
         await assemble(store.micHeader, micFiles, joinedMic);
-        const micScale = timecodeScaleNs(new Uint8Array(await fs.readFile(store.micHeader)));
-        micStart = clusterStartSeconds(await readPrefix(micFiles[0], 256), micScale);
       }
+      const videoStart = lead;
+      const micStart = lead;
       joined = {
         video: joinedVideo,
         mic: joinedMic || undefined,

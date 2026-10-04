@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type CSSProperties, type RefObject } from 
 import type { FolderItem } from "@shared/contracts";
 import { clipTitle, formatBytes, formatWhen } from "@shared/clips";
 import { POSTER_FAIL, posterImage } from "../player/usePosters";
-import { mediaUrl } from "../player/usePlayback";
 import { Icon } from "./Icon";
 
 type CardProps = {
@@ -20,114 +19,28 @@ type CardProps = {
 function useSeen<T extends HTMLElement>(
   onVisible: (path: string) => void,
   path: string,
-): { ref: RefObject<T | null>; seen: boolean } {
+): RefObject<T | null> {
   const ref = useRef<T | null>(null);
-  const [seen, setSeen] = useState(false);
   useEffect(() => {
     const node = ref.current;
     if (!node) return;
     const observer = new IntersectionObserver(
       (entries) => {
-        const visible = entries.some((entry) => entry.isIntersecting);
-        setSeen(visible);
-        if (visible) onVisible(path);
+        if (entries.some((entry) => entry.isIntersecting)) onVisible(path);
       },
       { rootMargin: "240px" },
     );
     observer.observe(node);
     return () => observer.disconnect();
   }, [onVisible, path]);
-  return { ref, seen };
+  return ref;
 }
 
-let stillQueue: Promise<void> = Promise.resolve();
-
-function releaseMedia(video: HTMLVideoElement): void {
-  video.pause();
-  video.removeAttribute("src");
-  video.load();
-}
-
-function drawStill(video: HTMLVideoElement): string | null {
-  if (video.videoWidth < 2) return null;
-  const width = 480;
-  const height = Math.max(2, Math.round(width * (video.videoHeight / video.videoWidth)));
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) return null;
-  context.drawImage(video, 0, 0, width, height);
-  try {
-    return canvas.toDataURL("image/jpeg", 0.72);
-  } catch {
-    return null;
-  }
-}
-
-function StillFrame({ path, onFrame }: { path: string; onFrame: (url: string) => void }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    let dropped = false;
-    const take = stillQueue.then(() => new Promise<void>((resolve) => {
-      if (dropped) {
-        resolve();
-        return;
-      }
-      let done = false;
-      let timer = 0;
-      const finish = (url: string | null): void => {
-        if (done) return;
-        done = true;
-        window.clearTimeout(timer);
-        video.removeEventListener("loadeddata", onData);
-        video.removeEventListener("seeked", onSeek);
-        releaseMedia(video);
-        if (url && !dropped) onFrame(url);
-        resolve();
-      };
-      const onSeek = (): void => finish(drawStill(video));
-      const onData = (): void => {
-        const duration = video.duration;
-        const ratio = Number.isFinite(duration) ? duration * 0.12 : 0.4;
-        const target = Math.min(1, Math.max(0.1, ratio));
-        if (video.currentTime < 0.05) video.currentTime = target;
-        else onSeek();
-      };
-      video.addEventListener("loadeddata", onData);
-      video.addEventListener("seeked", onSeek);
-      video.addEventListener("error", () => finish(null), { once: true });
-      timer = window.setTimeout(() => finish(null), 8000);
-      video.src = mediaUrl(path);
-    }));
-    stillQueue = take.then(() => undefined, () => undefined);
-    return () => {
-      dropped = true;
-      releaseMedia(video);
-    };
-  }, [onFrame, path]);
-
-  return <video ref={videoRef} muted playsInline preload="metadata" />;
-}
-
-export function Poster({
-  poster,
-  path,
-  seen,
-}: {
-  poster: string | undefined;
-  path: string;
-  seen: boolean;
-}) {
+export function Poster({ poster }: { poster: string | undefined }) {
   const image = posterImage(poster);
-  const [frame, setFrame] = useState<string | null>(null);
-  if (image) return <img src={image} alt="" />;
-  if (frame) return <img src={frame} alt="" />;
-  if (poster !== POSTER_FAIL || !seen) return <span className="clip-fallback is-wait" />;
-  return <StillFrame path={path} onFrame={setFrame} />;
+  if (image) return <img src={image} alt="" draggable={false} />;
+  const waiting = poster !== POSTER_FAIL;
+  return <span className={waiting ? "clip-fallback is-wait" : "clip-fallback"} />;
 }
 
 export function ClipCard({
@@ -141,7 +54,7 @@ export function ClipCard({
   selected,
   onSelect,
 }: CardProps) {
-  const { ref, seen } = useSeen<HTMLElement>(onVisible, item.path);
+  const ref = useSeen<HTMLElement>(onVisible, item.path);
   const [revealError, setRevealError] = useState(false);
 
   return (
@@ -176,7 +89,7 @@ export function ClipCard({
       />
       <div className="clip-frame">
         <span className="clip-ratio" />
-        <Poster poster={poster} path={item.path} seen={seen} />
+        <Poster poster={poster} />
         {onEdit ? (
           <button
             type="button"
@@ -228,7 +141,7 @@ export function SideClip({
   onSelect,
   thumbSize,
 }: SideProps) {
-  const { ref, seen } = useSeen<HTMLButtonElement>(onVisible, item.path);
+  const ref = useSeen<HTMLButtonElement>(onVisible, item.path);
 
   return (
     <button
@@ -258,7 +171,7 @@ export function SideClip({
         onChange={() => undefined}
       />
       <span className="side-thumb">
-        <Poster poster={poster} path={item.path} seen={seen || active} />
+        <Poster poster={poster} />
       </span>
       <span className="side-name" title={item.name}>
         {clipTitle(item.name)}

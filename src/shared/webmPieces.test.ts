@@ -4,9 +4,33 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import ffmpeg from "ffmpeg-static";
-import { clusterStartSeconds, findClusterOffset, splitWebmChunk, timecodeScaleNs } from "./webmPieces";
+import { clusterStartSeconds, findClusterOffset, firstKeyframeSeconds, firstSampleSeconds, sharedMediaStart, splitWebmChunk, timecodeScaleNs } from "./webmPieces";
 
 describe("webm pieces", () => {
+  it("seeks both files from the first sample, not the older cluster base", () => {
+    const cluster = new Uint8Array([
+      0x1F, 0x43, 0xB6, 0x75, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+      0xE7, 0x82, 0x27, 0x10,
+      0xA3, 0x41, 0x00,
+      0x81, 0x13, 0x88, 0x80,
+    ]);
+    expect(clusterStartSeconds(cluster)).toBe(10);
+    expect(firstSampleSeconds(cluster)).toBe(15);
+    expect(sharedMediaStart(1718.159, 1718.219)).toBe(1718.159);
+    expect(sharedMediaStart(1718.159, 0)).toBe(1718.159);
+  });
+
+  it("seeks to the first decodable frame, not the delta frames ahead of it", () => {
+    const cluster = new Uint8Array([
+      0x1F, 0x43, 0xB6, 0x75, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+      0xE7, 0x82, 0x27, 0x10,
+      0xA3, 0x89, 0x81, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x01, 0x41,
+      0xA3, 0x89, 0x81, 0x06, 0xA4, 0x80, 0x00, 0x00, 0x00, 0x01, 0x67,
+    ]);
+    expect(firstSampleSeconds(cluster)).toBe(10);
+    expect(firstKeyframeSeconds(cluster)).toBe(11.7);
+  });
+
   it("reads a cluster timecode without scanning the media", () => {
     const cluster = new Uint8Array([
       0x1F, 0x43, 0xB6, 0x75, 0x87,
@@ -31,6 +55,17 @@ describe("webm pieces", () => {
     expect(clusterStartSeconds(split!.cluster)).toBe(4);
     const onlyCluster = split!.cluster;
     expect(splitWebmChunk(onlyCluster)?.init).toBeNull();
+  });
+
+  it("keeps a microphone slice on the previous cluster clock", () => {
+    const blocks = new Uint8Array([
+      0xA3, 0x84, 0x81, 0x04, 0xB0, 0x80,
+      0xA3, 0x84, 0x81, 0x06, 0x54, 0x80,
+    ]);
+    const split = splitWebmChunk(blocks, 20000);
+    expect(split?.init).toBeNull();
+    expect(clusterStartSeconds(split!.cluster)).toBe(20);
+    expect(split?.clusterMs).toBe(20000);
   });
 
   it("wraps a microphone slice that is only SimpleBlocks", () => {
