@@ -5,14 +5,14 @@ import { replayBudget, replayBuffer, replayBitrate } from "@shared/replay";
 import { Icon } from "./Icon";
 import { BrandMark } from "./BrandMark";
 import { formatBytes } from "@shared/clips";
-import { audioLimiter, microphoneConstraints } from "../player/replayAudio";
+import { audioLimiter, humFilter, microphoneConstraints } from "../player/replayAudio";
 
-type Config = Pick<Settings, "replayAutoStart" | "replaySeconds" | "replayFps" | "replayHeight" | "replayMic" | "replayMicDeviceId" | "replayMicGain" | "replaySystemAudio" | "replaySystemGain" | "replayNoiseSuppression" | "replayEchoCancellation" | "replayBitrateKbps">;
+type Config = Pick<Settings, "replayAutoStart" | "replaySeconds" | "replayFps" | "replayHeight" | "replayMic" | "replayMicDeviceId" | "replayMicGain" | "replaySystemAudio" | "replaySystemGain" | "replayNoiseSuppression" | "replayEchoCancellation" | "replayMicHum" | "replayBitrateKbps">;
 function configOf(status: ReplayStatus): Config {
   return { replayAutoStart: status.autoStart, replaySeconds: status.seconds, replayFps: status.fps, replayHeight: status.height, replayMic: status.mic,
     replayMicDeviceId: status.micDeviceId, replayMicGain: status.micGain, replaySystemAudio: status.systemAudio,
     replaySystemGain: status.systemGain, replayNoiseSuppression: status.noiseSuppression,
-    replayEchoCancellation: status.echoCancellation, replayBitrateKbps: status.bitrateKbps };
+    replayEchoCancellation: status.echoCancellation, replayMicHum: status.micHum, replayBitrateKbps: status.bitrateKbps };
 }
 function durationLabel(seconds: number): string {
   return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
@@ -102,7 +102,8 @@ export function ReplayPanel({ compact = false }: { compact?: boolean }) {
   }, []);
   function edit(patch: Partial<Config>): void {
     if (draft && Object.entries(patch).every(([key, value]) => draft[key as keyof Config] === value)) return;
-    if (['replayMic', 'replayMicDeviceId', 'replayNoiseSuppression', 'replayEchoCancellation'].some(key => key in patch)) stopTest();
+    const voiceKeys = ["replayMic", "replayMicDeviceId", "replayNoiseSuppression", "replayEchoCancellation", "replayMicHum"];
+    if (voiceKeys.some((key) => key in patch)) stopTest();
     if (patch.replayMicGain !== undefined && testGain.current) {
       testGain.current.gain.setTargetAtTime(patch.replayMicGain, testGain.current.context.currentTime, .015);
     }
@@ -138,7 +139,9 @@ export function ReplayPanel({ compact = false }: { compact?: boolean }) {
       const analyser = context.createAnalyser(); analyser.fftSize = 2048;
       const gain = context.createGain(); gain.gain.value = draft.replayMicGain;
       testGain.current = gain;
-      context.createMediaStreamSource(stream).connect(gain).connect(analyser);
+      let voice: AudioNode = context.createMediaStreamSource(stream);
+      if (draft.replayMicHum) voice = humFilter(context, voice);
+      voice.connect(gain).connect(analyser);
       // Audition through the same limiter as capture; headphones avoid acoustic feedback.
       analyser.connect(audioLimiter(context)).connect(context.destination);
       let tick = 0;
@@ -215,7 +218,7 @@ export function ReplayPanel({ compact = false }: { compact?: boolean }) {
             </fieldset> : null}
             {tab === 'audio' ? <fieldset className="replay-fields" disabled={disabled}>
               <div className="replay-section-caption"><span>02 / AUDIO MIXER</span><span>Limiter protected</span></div>
-              <section className="replay-channel"><label className="replay-toggle"><span>System audio<small>Games, apps and desktop sound.</small></span><input type="checkbox" checked={draft.replaySystemAudio} onChange={(event) => edit({ replaySystemAudio: event.target.checked })} /></label><label className="replay-gain"><span>System level</span><input type="range" min={0} max={2} step={.05} value={draft.replaySystemGain} disabled={!draft.replaySystemAudio} onChange={(event) => edit({ replaySystemGain: Number(event.target.value) })} /><output>{Math.round(draft.replaySystemGain * 100)}%</output></label></section>
+              <section className="replay-channel"><label className="replay-toggle"><span>System audio<small>Stereo, as it plays. Voice is added only when the clip is saved.</small></span><input type="checkbox" checked={draft.replaySystemAudio} onChange={(event) => edit({ replaySystemAudio: event.target.checked })} /></label><label className="replay-gain"><span>System level</span><input type="range" min={0} max={2} step={.05} value={draft.replaySystemGain} disabled={!draft.replaySystemAudio} onChange={(event) => edit({ replaySystemGain: Number(event.target.value) })} /><output>{Math.round(draft.replaySystemGain * 100)}%</output></label></section>
               <section className="replay-channel"><label className="replay-toggle"><span>Microphone<small>Your voice, mixed into the clip.</small></span><input type="checkbox" checked={draft.replayMic} onChange={(event) => edit({ replayMic: event.target.checked })} /></label><div className="replay-device"><select aria-label="Microphone device" disabled={!draft.replayMic} value={draft.replayMicDeviceId} onChange={(event) => edit({ replayMicDeviceId: event.target.value })}><option value="">System default microphone</option>{devices.filter(device => device.deviceId && device.deviceId !== 'default').map((device,index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Microphone ${index + 1}`}</option>)}{draft.replayMicDeviceId && !devices.some(device => device.deviceId === draft.replayMicDeviceId) ? <option value={draft.replayMicDeviceId}>Selected microphone · unavailable</option> : null}</select><button type="button" className="text-btn" disabled={enumerating} onClick={() => void refreshDevices()}>{enumerating ? 'Refreshing…' : 'Refresh'}</button></div><label className="replay-gain"><span>Mic level</span><input aria-label="Microphone level" type="range" min={0} max={2} step={.05} value={draft.replayMicGain} disabled={!draft.replayMic} onChange={(event) => edit({ replayMicGain: Number(event.target.value) })} /><output>{Math.round(draft.replayMicGain * 100)}%</output></label><div className={`replay-mic-test${testing ? ' is-testing' : ''}`}>
                 <div className="replay-mic-test-header"><span>LIVE MIC MONITOR</span><button type="button" className="replay-test-button" disabled={!draft.replayMic} aria-pressed={testing} onClick={() => void testMic()}><i />{testing ? 'Stop test' : 'Start test'}</button></div>
                 <div className={`replay-mic-meter${testing && peakDb > -3 ? ' is-hot' : ''}`}><meter min={0} max={1} value={level} aria-label="Microphone signal level" /><output>{testing && !testStarting ? peakDb <= -60 ? '-inf dB' : `${Math.round(peakDb)} dB` : '-- dB'}</output></div>
@@ -224,8 +227,10 @@ export function ReplayPanel({ compact = false }: { compact?: boolean }) {
                 <small>Use headphones to avoid echo. Stop ends monitoring immediately.{status?.armed && draft.replaySystemAudio ? ' Live monitoring is also picked up by system-audio capture.' : ''}</small>
               </div></section>
               <div className="replay-section-caption"><span>VOICE PROCESSING</span><span>Optional</span></div>
-              <label className="replay-toggle replay-processing"><span>Noise suppression<small>Reduce steady background noise.</small></span><input type="checkbox" checked={draft.replayNoiseSuppression} disabled={!draft.replayMic} onChange={(event) => edit({ replayNoiseSuppression: event.target.checked })} /></label><label className="replay-toggle replay-processing"><span>Echo cancellation<small>For speakers instead of headphones.</small></span><input type="checkbox" checked={draft.replayEchoCancellation} disabled={!draft.replayMic} onChange={(event) => edit({ replayEchoCancellation: event.target.checked })} /></label>
-              <p className="replay-footnote">100% keeps the original level. Up to 200% boosts quiet sources. If your voice sounds processed, try turning off noise suppression and echo cancellation, especially with headset audio software.</p>
+              <label className="replay-toggle replay-processing"><span>Noise suppression<small>Microphone only. Steady noise, not desktop audio.</small></span><input type="checkbox" checked={draft.replayNoiseSuppression} disabled={!draft.replayMic} onChange={(event) => edit({ replayNoiseSuppression: event.target.checked })} /></label>
+              <label className="replay-toggle replay-processing"><span>Hum reduction<small>Microphone only. Cuts electrical buzz.</small></span><input type="checkbox" checked={draft.replayMicHum} disabled={!draft.replayMic} onChange={(event) => edit({ replayMicHum: event.target.checked })} /></label>
+              <label className="replay-toggle replay-processing"><span>Echo cancellation<small>Microphone only. For speakers instead of headphones.</small></span><input type="checkbox" checked={draft.replayEchoCancellation} disabled={!draft.replayMic} onChange={(event) => edit({ replayEchoCancellation: event.target.checked })} /></label>
+              <p className="replay-footnote">Desktop audio is recorded clean. These options touch the microphone only. 100% keeps the original level. Up to 200% boosts a quiet mic.</p>
             </fieldset> : null}
             {tab === 'save' ? <fieldset className="replay-fields" disabled={disabled}>
               <div className="replay-section-caption"><span>03 / SAVE & ACCESS</span><span>Ready when you are</span></div>

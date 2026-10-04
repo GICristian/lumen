@@ -100,6 +100,26 @@ button:disabled:hover { transform: none; box-shadow: none; }
 .hub-footer i { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 .hub-footer > span:last-child > span { padding-left: 12px; color: var(--accent); }
 .hub.is-drop .hub-player { outline: 2px solid var(--accent); outline-offset: 5px; }
+.update-banner {
+  position: absolute;
+  z-index: 40;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  max-width: min(560px, calc(100% - 32px));
+  padding: 10px 12px 10px 16px;
+  border: 1px solid #e6c18a55;
+  border-radius: 14px;
+  background: #161513f2;
+  box-shadow: 0 12px 32px #00000088;
+  -webkit-app-region: no-drag;
+}
+.update-banner strong { font-weight: 560; font-size: 13px; }
+.update-banner .export-btn { min-height: 34px; padding-inline: 14px; transition: transform 180ms ease; }
+.update-banner .export-btn:hover:not(:disabled) { transform: scale(1.02); }
 /* Picture-first player. The rail reserves picture space whenever it expands. */
 .titlebar { flex: none; height: 54px; padding: 0 12px; gap: 14px; background: #101213; border-bottom: 1px solid var(--line); backdrop-filter: none; }
 .titlebar .brand-mark-svg { width: 23px; height: 23px; }

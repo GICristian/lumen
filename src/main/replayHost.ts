@@ -7,11 +7,14 @@ import {
   screen,
   session,
 } from "electron";
-import { spawn } from "node:child_process";
-import { promises as fs } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { createReadStream, createWriteStream, promises as fs } from "node:fs";
 import path from "node:path";
 import type { ReplayCaptureOptions, ReplayStatus, ReplaySegment, ReplayCaptureInfo } from "@shared/contracts";
 import {
+  buildFileMixSaveArgs,
+  buildFileSaveArgs,
+  buildMixSaveArgs,
   buildSaveArgs,
   concatLine,
   pictureBroken,
@@ -21,6 +24,7 @@ import {
   replayHeight,
   replayGain, replayBitrate, replayDevice,
 } from "@shared/replay";
+import { clusterStartSeconds, timecodeScaleNs } from "@shared/webmPieces";
 import { showReplayToast, dismissReplayToast } from "./replayToast";
 import { ReplayStore } from "./replayStore";
 import { ffmpegBinary } from "./ffmpeg";
@@ -93,6 +97,7 @@ function status(): ReplayStatus {
     systemGain: settings.replaySystemGain,
     noiseSuppression: settings.replayNoiseSuppression,
     echoCancellation: settings.replayEchoCancellation,
+    micHum: settings.replayMicHum,
     bitrateKbps: settings.replayBitrateKbps,
     bufferedSeconds: Math.min(settings.replaySeconds, store?.seconds ?? 0),
     bufferBytes: store?.bytes ?? 0,
@@ -190,6 +195,7 @@ function captureOptions(): ReplayCaptureOptions {
     micDeviceId: settings.replayMicDeviceId, micGain: settings.replayMicGain,
     systemAudio: settings.replaySystemAudio, systemGain: settings.replaySystemGain,
     noiseSuppression: settings.replayNoiseSuppression, echoCancellation: settings.replayEchoCancellation,
+    micHum: settings.replayMicHum,
     bitrateKbps: settings.replayBitrateKbps };
 }
 
@@ -254,7 +260,7 @@ function picturePlays(file: string): Promise<boolean> {
   return new Promise((resolve) => {
     let proc;
     try {
-      proc = spawn(ffmpegBinary(), ["-v", "error", "-i", file, "-map", "0:v:0", "-f", "null", "-"], { windowsHide: true });
+      proc = spawn(ffmpegBinary(), ["-v", "error", "-i", file, "-t", "2", "-map", "0:v:0", "-f", "null", "-"], { windowsHide: true });
     } catch {
       resolve(false);
       return;
@@ -268,31 +274,112 @@ function picturePlays(file: string): Promise<boolean> {
   });
 }
 
-function runSave(files: string[], output: string, copy: boolean, duration: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const listPath = path.join(bufferDir, "save.txt");
-    const body = files.map(concatLine).join("\n");
-    void fs.writeFile(listPath, body, "utf8").then(() => {
-      let proc;
-      try {
-        proc = spawn(ffmpegBinary(), buildSaveArgs(listPath, output, copy, duration), { windowsHide: true });
-      } catch {
-        reject(new Error("ffmpeg is not available"));
-        return;
-      }
-      let err = "";
-      let decodeFailed = false;
-      proc.stderr?.on("data", (chunk: Buffer) => {
-        err = (err + String(chunk)).slice(-500);
-        decodeFailed ||= /Error (?:submitting|decoding|parsing)|Decoding error|Invalid data found|Error while decoding/i.test(err);
-      });
-      proc.on("error", () => reject(new Error("ffmpeg is not available")));
-      proc.on("close", (code) => {
-        if (code === 0 && !decodeFailed) resolve();
-        else reject(new Error(err.trim() || "Could not save the replay."));
-      });
-    }, reject);
+let saveEncoder = "libx264";
+
+function detectSaveEncoder(): string {
+  try {
+    const listed = spawnSync(ffmpegBinary(), ["-hide_banner", "-encoders"], { windowsHide: true, encoding: "utf8" });
+    const text = `${listed.stdout ?? ""}\n${listed.stderr ?? ""}`;
+    if (text.includes("h264_nvenc")) return "h264_nvenc";
+    if (text.includes("h264_amf")) return "h264_amf";
+    if (text.includes("h264_qsv")) return "h264_qsv";
+  } catch {
+    return "libx264";
+  }
+  return "libx264";
+}
+
+type MicMix = { files: string[]; systemGain: number; micGain: number };
+
+async function assemble(initPath: string, parts: string[], dest: string): Promise<void> {
+  const out = createWriteStream(dest);
+  const pipe = (file: string) => new Promise<void>((resolve, reject) => {
+    const input = createReadStream(file);
+    input.on("error", reject);
+    input.on("end", resolve);
+    input.pipe(out, { end: false });
   });
+  try {
+    await pipe(initPath);
+    for (const part of parts) await pipe(part);
+  } finally {
+    out.end();
+    await new Promise<void>((resolve) => out.on("close", resolve));
+  }
+}
+
+async function readPrefix(file: string, count: number): Promise<Uint8Array> {
+  const handle = await fs.open(file, "r");
+  try {
+    const buf = Buffer.alloc(count);
+    const { bytesRead } = await handle.read(buf, 0, count, 0);
+    return buf.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+function spawnFfmpeg(args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let proc;
+    try {
+      proc = spawn(ffmpegBinary(), args, { windowsHide: true });
+    } catch {
+      reject(new Error("ffmpeg is not available"));
+      return;
+    }
+    let err = "";
+    let decodeFailed = false;
+    proc.stderr?.on("data", (chunk: Buffer) => {
+      err = (err + String(chunk)).slice(-500);
+      decodeFailed ||= /Error (?:submitting|decoding|parsing)|Decoding error|Invalid data found|Error while decoding/i.test(err);
+    });
+    proc.on("error", () => reject(new Error("ffmpeg is not available")));
+    proc.on("close", (code) => {
+      if (code === 0 && !decodeFailed) resolve();
+      else reject(new Error(err.trim() || "Could not save the replay."));
+    });
+  });
+}
+
+type JoinedTake = {
+  video: string;
+  mic?: string;
+  videoStart: number;
+  micStart: number;
+  systemGain: number;
+  micGain: number;
+  micLeadMs: number;
+};
+
+function runSave(
+  files: string[],
+  output: string,
+  copy: boolean,
+  duration: number,
+  encoder = saveEncoder,
+  mix?: MicMix,
+): Promise<void> {
+  const listPath = path.join(bufferDir, "save.txt");
+  const micPath = path.join(bufferDir, "save-mic.txt");
+  const writes = [fs.writeFile(listPath, files.map(concatLine).join("\n"), "utf8")];
+  if (mix) writes.push(fs.writeFile(micPath, mix.files.map(concatLine).join("\n"), "utf8"));
+  return Promise.all(writes).then(() => {
+    const args = mix
+      ? buildMixSaveArgs(listPath, micPath, output, copy, duration, encoder, mix.systemGain, mix.micGain)
+      : buildSaveArgs(listPath, output, copy, duration, encoder);
+    return spawnFfmpeg(args);
+  });
+}
+
+function runJoined(take: JoinedTake, output: string, copy: boolean, duration: number, encoder: string): Promise<void> {
+  const args = take.mic
+    ? buildFileMixSaveArgs(
+      take.video, take.mic, output, copy, duration, encoder,
+      take.systemGain, take.micGain, take.videoStart, take.micStart, take.micLeadMs,
+    )
+    : buildFileSaveArgs(take.video, output, copy, duration, encoder, take.videoStart, take.systemGain);
+  return spawnFfmpeg(args);
 }
 
 async function freePath(filePath: string): Promise<string> {
@@ -389,24 +476,82 @@ async function saveReplay(cutoff: number, sessionId: string): Promise<void> {
     release = snapshot.release;
     const files = snapshot.segments.map((item) => item.file);
     if (files.length === 0) throw new Error("Nothing to save yet. Give it a few seconds.");
+    const micFiles = snapshot.segments.flatMap((item) => item.micFile ? [item.micFile] : []);
+    const settingsNow = getSettings();
+    const mix: MicMix | undefined = micFiles.length === files.length ? {
+      files: micFiles,
+      systemGain: settingsNow.replaySystemGain,
+      micGain: settingsNow.replayMicGain,
+    } : undefined;
+    const continuous = Boolean(store.videoHeader) && snapshot.segments.every((item) => item.cluster);
+    let joinedVideo = "";
+    let joinedMic = "";
+    let joined: JoinedTake | undefined;
+    if (continuous && store.videoHeader) {
+      joinedVideo = path.join(bufferDir, "joined.webm");
+      await assemble(store.videoHeader, files, joinedVideo);
+      const scale = timecodeScaleNs(new Uint8Array(await fs.readFile(store.videoHeader)));
+      const videoStart = clusterStartSeconds(await readPrefix(files[0], 256), scale);
+      let micStart = 0;
+      if (mix && store.micHeader) {
+        joinedMic = path.join(bufferDir, "joined.mic.webm");
+        await assemble(store.micHeader, micFiles, joinedMic);
+        const micScale = timecodeScaleNs(new Uint8Array(await fs.readFile(store.micHeader)));
+        micStart = clusterStartSeconds(await readPrefix(micFiles[0], 256), micScale);
+      }
+      joined = {
+        video: joinedVideo,
+        mic: joinedMic || undefined,
+        videoStart,
+        micStart,
+        systemGain: settingsNow.replaySystemGain,
+        micGain: settingsNow.replayMicGain,
+        micLeadMs: store.micLeadMs,
+      };
+    }
     const dir = outputDirectory();
     await fs.mkdir(dir, { recursive: true });
     const output = await freePath(path.join(dir, replayFileName(new Date())));
     const temporary = `${output}.partial.mp4`;
-    try {
+    const writeClip = async (voice: boolean): Promise<void> => {
+      const saveCopy = (encoder: string, copy: boolean) => (joined
+        ? runJoined({ ...joined, mic: voice ? joined.mic : undefined }, temporary, copy, snapshot.duration, encoder)
+        : runSave(files, temporary, copy, snapshot.duration, encoder, voice ? mix : undefined));
+      const encode = async (): Promise<void> => {
+        try {
+          await saveCopy(saveEncoder, false);
+        } catch (error) {
+          if (saveEncoder === "libx264") throw error;
+          await fs.rm(temporary, { force: true }).catch(() => undefined);
+          await saveCopy("libx264", false);
+        }
+      };
       let copied = true;
-      try { await runSave(files, temporary, true, snapshot.duration); }
+      try { await saveCopy(saveEncoder, true); }
       catch {
         copied = false;
         await fs.rm(temporary, { force: true }).catch(() => undefined);
-        await runSave(files, temporary, false, snapshot.duration);
+        await encode();
       }
       if (copied && !(await picturePlays(temporary))) {
         await fs.rm(temporary, { force: true }).catch(() => undefined);
-        await runSave(files, temporary, false, snapshot.duration);
+        await encode();
+      }
+    };
+    try {
+      try {
+        await writeClip(Boolean(mix));
+      } catch (error) {
+        if (!mix) throw error;
+        await fs.rm(temporary, { force: true }).catch(() => undefined);
+        await writeClip(false);
       }
       await fs.rename(temporary, output);
-    } finally { await fs.rm(temporary, { force: true }).catch(() => undefined); }
+    } finally {
+      await fs.rm(temporary, { force: true }).catch(() => undefined);
+      if (joinedVideo) await fs.rm(joinedVideo, { force: true }).catch(() => undefined);
+      if (joinedMic) await fs.rm(joinedMic, { force: true }).catch(() => undefined);
+    }
     lastFile = output;
     notice = "Saved.";
     savedFlash = true;
@@ -473,6 +618,7 @@ export function stopReplay(): void {
 
 export function initReplay(dir: string): void {
   bufferDir = dir;
+  saveEncoder = detectSaveEncoder();
   store = new ReplayStore(dir);
   installCaptureHandler();
   bindReplaySaver(() => {
@@ -487,7 +633,17 @@ export function initReplay(dir: string): void {
     if (!armed || !isCapture(event.sender.id)) return;
     if (!segment || segment.sessionId !== store.sessionId || !(segment.bytes instanceof Uint8Array)) return;
     writeQueue = writeQueue.catch(() => undefined).then(async () => {
-      if (segment.bytes.length > 0) await store.append(segment.sessionId, segment.bytes, segment.duration, segment.startedAt, segment.endedAt);
+      if (segment.bytes.length > 0) {
+        const voice = segment.micBytes instanceof Uint8Array && segment.micBytes.byteLength > 0
+          ? segment.micBytes : undefined;
+        const header = segment.headerBytes instanceof Uint8Array ? segment.headerBytes : undefined;
+        const micHeader = segment.micHeaderBytes instanceof Uint8Array ? segment.micHeaderBytes : undefined;
+        await store.append(
+          segment.sessionId, segment.bytes, segment.duration, segment.startedAt, segment.endedAt, voice, {
+            header, micHeader, cluster: segment.cluster === true, micLeadMs: segment.micLeadMs,
+          },
+        );
+      }
       await prune();
       if (pendingFlush && pendingFlush.id === segment.flushId) pendingFlush.finish();
       publish();
@@ -545,6 +701,7 @@ export function initReplay(dir: string): void {
       replaySystemGain: next.replaySystemGain === undefined ? current.replaySystemGain : replayGain(next.replaySystemGain),
       replayNoiseSuppression: typeof next.replayNoiseSuppression === "boolean" ? next.replayNoiseSuppression : current.replayNoiseSuppression,
       replayEchoCancellation: typeof next.replayEchoCancellation === "boolean" ? next.replayEchoCancellation : current.replayEchoCancellation,
+      replayMicHum: typeof next.replayMicHum === "boolean" ? next.replayMicHum : current.replayMicHum,
       replayBitrateKbps: next.replayBitrateKbps === undefined ? current.replayBitrateKbps : replayBitrate(next.replayBitrateKbps),
     };
     const audioChanged = (Object.keys(audio) as (keyof typeof audio)[]).some((key) => audio[key] !== current[key]);

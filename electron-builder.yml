@@ -2,6 +2,10 @@ appId: com.lumen.player
 productName: Lumen
 directories:
   output: release
+publish:
+  provider: github
+  owner: GICristian
+  repo: lumen
 files:
   - out
   - package.json

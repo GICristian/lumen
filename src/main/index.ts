@@ -8,6 +8,7 @@ import { initVault, vaultLock } from "./vault";
 import { videoArg } from "./library";
 import { hideToTray, registerIpc, revealWindow } from "./ipc";
 import { getSettings, initSettings, patchSettings } from "./settings";
+import { initUpdates } from "./updates";
 
 app.commandLine.appendSwitch("enable-features", "PlatformHEVCDecoderSupport");
 
@@ -151,6 +152,10 @@ if (!gotLock) {
       },
     });
     initReplay(path.join(userData, "replay-buffer"));
+    initUpdates(() => {
+      quitting = true;
+      stopReplay();
+    });
   });
 
   app.on("before-quit", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSaveArgs, concatLine, pictureBroken, replayFileName, segmentsToDrop, replayDimensions, replayBuffer, replayTail } from "./replay";
+import { buildFileMixSaveArgs, buildMixSaveArgs, buildSaveArgs, concatLine, encodeVideoArgs, pictureBroken, replayFileName, segmentsToDrop, replayDimensions, replayBuffer, replayTail } from "./replay";
 
 describe("capture sizing and duration", () => {
   it("scales the full screen without stretching, cropping or upscaling", () => {
@@ -39,5 +39,25 @@ describe("save", () => {
     );
     expect(pictureBroken("Invalid NAL unit 0, skipping.")).toBe(true);
     expect(pictureBroken("")).toBe(false);
+    const nvenc = buildSaveArgs("list.txt", "out.mp4", false, undefined, "h264_nvenc");
+    expect(nvenc).toContain("h264_nvenc");
+    expect(nvenc).not.toContain("libx264");
+    expect(encodeVideoArgs("missing")).toContain("libx264");
+    const mixed = buildMixSaveArgs("video.txt", "mic.txt", "out.mp4", true, 12, "h264_nvenc", 1, 1.6);
+    const graph = mixed.join(" ");
+    expect(graph).toContain("normalize=0");
+    expect(graph).toContain("volume=1.600");
+    expect(graph).not.toContain("[0:a]aresample=48000:async=1:first_pts=0,volume=");
+    expect(graph).not.toContain("h264_nvenc");
+    expect(mixed[mixed.indexOf("-c:v") + 1]).toBe("copy");
+    const ahead = buildFileMixSaveArgs("v.webm", "m.webm", "out.mp4", true, 8, "libx264", 1, 1.6, 12, 11.96, 40);
+    const aheadText = ahead.join(" ");
+    expect(aheadText).toContain("adelay=40|40");
+    expect(aheadText).toContain("normalize=0");
+    expect(ahead).toContain("12.000");
+    expect(ahead).toContain("11.960");
+    const behind = buildFileMixSaveArgs("v.webm", "m.webm", "out.mp4", false, 8, "libx264", 1, 1, 0, 0, -30);
+    expect(behind.join(" ")).toContain("atrim=start=0.030");
+    expect(behind.join(" ")).not.toContain("adelay=");
   });
 });

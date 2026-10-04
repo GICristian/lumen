@@ -41,6 +41,32 @@ describe("replay buffer ownership", () => {
     expect(store.seconds).toBe(4); expect(store.bytes).toBe(10);
     await expect(fs.stat(saving.segments[0].file)).rejects.toThrow();
   });
+  it("keeps the live header when clusters are pruned", async () => {
+    const { store } = await setup();
+    await store.append(store.sessionId, new Uint8Array(8), 4, 1000, 5000, new Uint8Array(6), {
+      header: new Uint8Array([9, 8, 7, 6]),
+      micHeader: new Uint8Array([5, 4]),
+      cluster: true,
+      micLeadMs: 25,
+    });
+    expect(store.segments[0].cluster).toBe(true);
+    expect(store.micLeadMs).toBe(25);
+    expect((await fs.stat(store.videoHeader!)).size).toBe(4);
+    expect((await fs.stat(store.micHeader!)).size).toBe(2);
+    await store.prune(0);
+    expect(store.segments.length).toBe(0);
+    expect((await fs.stat(store.videoHeader!)).size).toBe(4);
+  });
+  it("keeps the microphone beside its picture and deletes both together", async () => {
+    const { store } = await setup();
+    await store.append(store.sessionId, new Uint8Array(8), 4, 1000, 5000, new Uint8Array(12));
+    const [entry] = store.segments;
+    expect(entry.micFile).toMatch(/\.mic\.webm$/);
+    expect((await fs.stat(entry.micFile!)).size).toBe(12);
+    await store.prune(0);
+    await expect(fs.stat(entry.file)).rejects.toThrow();
+    await expect(fs.stat(entry.micFile!)).rejects.toThrow();
+  });
   it("cannot put an old session's late write into a restarted buffer", async () => {
     const { store, root } = await setup(); const old = store.sessionId;
     const pending = store.append(old, new Uint8Array(1024 * 1024), 4);

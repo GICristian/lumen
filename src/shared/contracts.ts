@@ -30,6 +30,7 @@ export type Settings = {
   replaySystemGain: number;
   replayNoiseSuppression: boolean;
   replayEchoCancellation: boolean;
+  replayMicHum: boolean;
   replayBitrateKbps: number;
   replayAccelerator: string;
   replayDirectory: string | null;
@@ -51,6 +52,7 @@ export type ReplayStatus = {
   systemGain: number;
   noiseSuppression: boolean;
   echoCancellation: boolean;
+  micHum: boolean;
   bitrateKbps: number;
   bufferedSeconds: number;
   bufferBytes: number;
@@ -75,10 +77,25 @@ export type ReplayCaptureOptions = {
   systemGain: number;
   noiseSuppression: boolean;
   echoCancellation: boolean;
+  micHum: boolean;
   bitrateKbps: number;
 };
 
-export type ReplaySegment = { sessionId: string; bytes: Uint8Array; duration: number; startedAt: number; endedAt: number; flushId?: string };
+export type ReplaySegment = {
+  sessionId: string;
+  bytes: Uint8Array;
+  micBytes?: Uint8Array;
+  headerBytes?: Uint8Array;
+  micHeaderBytes?: Uint8Array;
+  /** Positive when the microphone recording is ahead of the picture, in milliseconds. */
+  micLeadMs?: number;
+  /** Cluster from a recorder that is still running, not a file that was stopped and started. */
+  cluster?: boolean;
+  duration: number;
+  startedAt: number;
+  endedAt: number;
+  flushId?: string;
+};
 
 export type ReplayCaptureInfo = {
   sessionId: string;
@@ -138,6 +155,15 @@ export type VaultItem = {
 export type VaultStatus = {
   exists: boolean;
   open: boolean;
+};
+
+export type UpdatePhase = "idle" | "available" | "downloading" | "ready" | "error";
+
+export type UpdateState = {
+  phase: UpdatePhase;
+  version: string | null;
+  percent: number;
+  message: string | null;
 };
 
 export type ExportProgress = { jobId: string; ratio: number };
@@ -222,4 +248,7 @@ export type LumenApi = {
   replaySegment: (segment: ReplaySegment) => Promise<void>;
   replayCaptureReady: (info: ReplayCaptureInfo) => void;
   replayCaptureFailed: (message: string) => void;
+  updateState: () => Promise<UpdateState>;
+  installUpdate: () => Promise<void>;
+  onUpdateState: (cb: (state: UpdateState) => void) => () => void;
 };

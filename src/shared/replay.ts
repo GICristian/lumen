@@ -80,8 +80,131 @@ export function pictureBroken(stderr: string): boolean {
   return /Invalid NAL|Decoding error|Invalid data found|Error while decoding/i.test(stderr);
 }
 
+/** Hardware first. libx264 is the fallback when the GPU encoder is missing. */
+export function encodeVideoArgs(encoder: string): string[] {
+  if (encoder === "h264_nvenc") {
+    return ["-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ll", "-rc", "constqp", "-qp", "23", "-pix_fmt", "yuv420p"];
+  }
+  if (encoder === "h264_amf") {
+    return ["-c:v", "h264_amf", "-quality", "speed", "-rc", "cqp", "-qp_i", "22", "-qp_p", "24"];
+  }
+  if (encoder === "h264_qsv") {
+    return ["-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "23"];
+  }
+  return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"];
+}
+
+/**
+ * Desktop audio stays on input 0. The microphone is added afterwards, at its own
+ * gain, without dividing the song by the input count.
+ */
+export function buildMixSaveArgs(
+  videoList: string,
+  micList: string,
+  output: string,
+  copy: boolean,
+  duration?: number,
+  encoder = "libx264",
+  systemGain = 1,
+  micGain = 1,
+): string[] {
+  const args = [
+    "-hide_banner", "-loglevel", "error", "-nostdin", "-max_error_rate", "0", "-y",
+    "-f", "concat", "-safe", "0", "-c:a", "libopus", "-i", videoList,
+    "-f", "concat", "-safe", "0", "-c:a", "libopus", "-i", micList,
+  ];
+  if (duration !== undefined && Number.isFinite(duration) && duration > 0) {
+    args.push("-t", duration.toFixed(6));
+  }
+  const system = Math.abs(systemGain - 1) < 0.001
+    ? "aresample=48000:async=1:first_pts=0"
+    : `aresample=48000:async=1:first_pts=0,volume=${systemGain.toFixed(3)}`;
+  const voice = `aresample=48000:async=1:first_pts=0,volume=${micGain.toFixed(3)}`;
+  const mix = `[0:a]${system}[sys];[1:a]${voice}[mic];`
+    + "[sys][mic]amix=inputs=2:duration=first:normalize=0:dropout_transition=0[aout]";
+  args.push("-filter_complex", mix, "-map", "0:v:0", "-map", "[aout]");
+  if (copy) args.push("-c:v", "copy");
+  else args.push(...encodeVideoArgs(encoder));
+  args.push("-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-movflags", "+faststart", output);
+  return args;
+}
+
+function mediaTail(copy: boolean, encoder: string, output: string, audioBitrate = "160k"): string[] {
+  const args: string[] = [];
+  if (copy) args.push("-c:v", "copy");
+  else args.push(...encodeVideoArgs(encoder));
+  args.push("-c:a", "aac", "-b:a", audioBitrate, "-ar", "48000", "-movflags", "+faststart", output);
+  return args;
+}
+
+function gainFilter(base: string, gain: number): string {
+  return Math.abs(gain - 1) < 0.001 ? base : `${base},volume=${gain.toFixed(3)}`;
+}
+
+/**
+ * One continuous recording. `start` skips clusters that the ring already dropped.
+ * `micLeadMs` > 0 means the microphone file is ahead of the picture.
+ */
+export function buildFileSaveArgs(
+  input: string,
+  output: string,
+  copy: boolean,
+  duration?: number,
+  encoder = "libx264",
+  start = 0,
+  systemGain = 1,
+): string[] {
+  const args = ["-hide_banner", "-loglevel", "error", "-nostdin", "-y"];
+  if (start > 0.001) args.push("-ss", start.toFixed(3));
+  args.push("-i", input);
+  if (duration !== undefined && Number.isFinite(duration) && duration > 0) args.push("-t", duration.toFixed(6));
+  args.push("-af", gainFilter("aresample=48000", systemGain));
+  args.push(...mediaTail(copy, encoder, output, "256k"));
+  return args;
+}
+
+/** Picture file plus the microphone file from the same continuous take. */
+export function buildFileMixSaveArgs(
+  video: string,
+  mic: string,
+  output: string,
+  copy: boolean,
+  duration?: number,
+  encoder = "libx264",
+  systemGain = 1,
+  micGain = 1,
+  videoStart = 0,
+  micStart = 0,
+  micLeadMs = 0,
+): string[] {
+  const args = ["-hide_banner", "-loglevel", "error", "-nostdin", "-y"];
+  if (videoStart > 0.001) args.push("-ss", videoStart.toFixed(3));
+  args.push("-i", video);
+  if (micStart > 0.001) args.push("-ss", micStart.toFixed(3));
+  args.push("-i", mic);
+  if (duration !== undefined && Number.isFinite(duration) && duration > 0) args.push("-t", duration.toFixed(6));
+  const shift = Math.max(-500, Math.min(500, micLeadMs));
+  const voice: string[] = [];
+  if (shift > 1) voice.push(`adelay=${Math.round(shift)}|${Math.round(shift)}`);
+  if (shift < -1) voice.push(`atrim=start=${(-shift / 1000).toFixed(3)}`, "asetpts=PTS-STARTPTS");
+  voice.push("aresample=48000");
+  const system = gainFilter("aresample=48000", systemGain);
+  const micChain = gainFilter(voice.join(","), micGain);
+  const mix = `[0:a]${system}[sys];[1:a]${micChain}[mic];`
+    + "[sys][mic]amix=inputs=2:duration=first:normalize=0:dropout_transition=0[aout]";
+  args.push("-filter_complex", mix, "-map", "0:v:0", "-map", "[aout]");
+  args.push(...mediaTail(copy, encoder, output, "256k"));
+  return args;
+}
+
 /** Join finished segments. Copy first; the caller retries with a re-encode if the codecs refuse. */
-export function buildSaveArgs(listPath: string, output: string, copy: boolean, duration?: number): string[] {
+export function buildSaveArgs(
+  listPath: string,
+  output: string,
+  copy: boolean,
+  duration?: number,
+  encoder = "libx264",
+): string[] {
   const args = [
     "-hide_banner", "-loglevel", "error", "-nostdin", "-max_error_rate", "0", "-y",
     "-f", "concat", "-safe", "0", "-c:a", "libopus", "-i", listPath,
@@ -90,13 +213,8 @@ export function buildSaveArgs(listPath: string, output: string, copy: boolean, d
   // Independent recorder segments can overlap or leave small gaps in audio PTS.
   // Reconcile those discontinuities in samples, without stretching voice/pitch.
   args.push("-af", "aresample=48000:async=1:first_pts=0", "-ar", "48000");
-  if (copy) args.push("-c:v", "copy", "-c:a", "aac", "-b:a", "160k");
-  else {
-    args.push(
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-      "-c:a", "aac", "-b:a", "160k",
-    );
-  }
-  args.push("-movflags", "+faststart", output);
+  if (copy) args.push("-c:v", "copy");
+  else args.push(...encodeVideoArgs(encoder));
+  args.push("-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", output);
   return args;
 }

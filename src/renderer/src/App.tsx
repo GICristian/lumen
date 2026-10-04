@@ -17,6 +17,7 @@ import { OverlayDetail } from "./components/OverlayDetail";
 import { FolderList } from "./components/FolderList";
 import { Timeline } from "./components/Timeline";
 import { TitleBar } from "./components/TitleBar";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { Transport } from "./components/Transport";
 import { VideoStage, type VideoStageHandle } from "./components/VideoStage";
 import { fileName, formatClock, seekLabel, useChromeFade, useOsd } from "./player/usePlayback";
@@ -802,6 +803,7 @@ export function App() {
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
+      <UpdateBanner />
       {home && hubPage === "vault" ? (
         <VaultPane
           onPlay={(item) => void playVault(item)}

@@ -60,6 +60,13 @@ button, input { font: inherit; color: inherit; }
   cursor: none !important;
 }
 
+.shell.is-cinema .update-banner,
+.shell.is-cinema .update-banner * {
+  cursor: auto !important;
+  pointer-events: auto;
+  opacity: 1;
+}
+
 .shell.is-home > .titlebar,
 .shell.is-home > .workspace { display: none; }
 

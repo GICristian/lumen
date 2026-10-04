@@ -9,6 +9,7 @@ import type {
   ReplayCaptureOptions,
   ReplayStatus,
   Settings,
+  UpdateState,
   SubtitleHit,
   VaultItem,
 } from "@shared/contracts";
@@ -97,6 +98,9 @@ const api: LumenApi = {
   replaySegment: (segment) => ipcRenderer.invoke("replay:segment", segment),
   replayCaptureReady: (info: ReplayCaptureInfo) => ipcRenderer.send("replay:capture-ready", info),
   replayCaptureFailed: (message) => ipcRenderer.send("replay:capture-failed", message),
+  updateState: () => ipcRenderer.invoke("update:state") as Promise<UpdateState>,
+  installUpdate: () => ipcRenderer.invoke("update:install"),
+  onUpdateState: (cb) => subscribe<UpdateState>("update:state", cb),
 };
 
 contextBridge.exposeInMainWorld("lumen", api);

@@ -33,8 +33,9 @@ export const defaultSettings: Settings = {
   replayMicGain: 1,
   replaySystemAudio: true,
   replaySystemGain: 1,
-  replayNoiseSuppression: false,
+  replayNoiseSuppression: true,
   replayEchoCancellation: false,
+  replayMicHum: true,
   replayBitrateKbps: 8000,
   replayAccelerator: "Ctrl+Alt+Shift+R",
   replayDirectory: null,
@@ -94,8 +95,11 @@ export function normalizeSettings(raw: Partial<Settings> | null): Settings {
     replayMicGain: replayGain(raw?.replayMicGain),
     replaySystemAudio: raw?.replaySystemAudio !== false,
     replaySystemGain: replayGain(raw?.replaySystemGain),
-    replayNoiseSuppression: raw?.replayNoiseSuppression === true,
+    replayNoiseSuppression: raw?.replayMicHum === undefined
+      ? true
+      : raw?.replayNoiseSuppression === true,
     replayEchoCancellation: raw?.replayEchoCancellation === true,
+    replayMicHum: raw?.replayMicHum !== false,
     replayBitrateKbps: replayBitrate(raw?.replayBitrateKbps),
     replayAccelerator: replayAccelerator(raw?.replayAccelerator),
     replayDirectory: typeof raw?.replayDirectory === "string" && raw.replayDirectory.trim()
