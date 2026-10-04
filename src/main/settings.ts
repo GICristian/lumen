@@ -1,21 +1,43 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Settings } from "@shared/contracts";
+import { defaultCueStyle, normalizeCueStyle } from "@shared/cues";
 import { rememberFolder } from "@shared/folders";
-import { overlayAccelerator } from "@shared/shortcut";
+import { overlayAccelerator, replayAccelerator, vaultAccelerator } from "@shared/shortcut";
+import { replayBuffer, replayFps, replayHeight, replayGain, replayBitrate, replayDevice } from "@shared/replay";
 import { clampVolume } from "@shared/volume";
 
 export const defaultSettings: Settings = {
   volume: 1,
   loop: false,
   preciseTrim: false,
-  folderOpen: true,
+  folderOpen: false,
+  libraryPinned: false,
   windowBounds: null,
   lastFolder: null,
   recentFolders: [],
   overlayAccelerator: "Ctrl+Alt+L",
+  vaultAccelerator: "Ctrl+Alt+Shift+V",
   launchOnStartup: false,
   overlayBounds: null,
+  cueStyle: { ...defaultCueStyle },
+  subtitleLanguage: "rum",
+  exportDirectory: null,
+  cursorSize: 24,
+  replaySeconds: 60,
+  replayAutoStart: true,
+  replayFps: 30,
+  replayHeight: 1080,
+  replayMic: true,
+  replayMicDeviceId: "",
+  replayMicGain: 1,
+  replaySystemAudio: true,
+  replaySystemGain: 1,
+  replayNoiseSuppression: false,
+  replayEchoCancellation: false,
+  replayBitrateKbps: 8000,
+  replayAccelerator: "Ctrl+Alt+Shift+R",
+  replayDirectory: null,
 };
 
 function overlayBoundsOk(value: unknown): value is NonNullable<Settings["overlayBounds"]> {
@@ -42,7 +64,8 @@ export function normalizeSettings(raw: Partial<Settings> | null): Settings {
     volume: clampVolume(typeof raw?.volume === "number" ? raw.volume : 1),
     loop: raw?.loop === true,
     preciseTrim: raw?.preciseTrim === true,
-    folderOpen: raw?.folderOpen !== false,
+    folderOpen: raw?.folderOpen === true,
+    libraryPinned: raw?.libraryPinned === true,
     windowBounds: boundsOk(raw?.windowBounds) ? raw.windowBounds : null,
     lastFolder:
       typeof raw?.lastFolder === "string" && raw.lastFolder.trim() ? raw.lastFolder : null,
@@ -53,8 +76,31 @@ export function normalizeSettings(raw: Partial<Settings> | null): Settings {
       typeof raw?.lastFolder === "string" ? raw.lastFolder : "",
     ),
     overlayAccelerator: overlayAccelerator(raw?.overlayAccelerator),
+    vaultAccelerator: vaultAccelerator(raw?.vaultAccelerator),
     launchOnStartup: raw?.launchOnStartup === true,
     overlayBounds: overlayBoundsOk(raw?.overlayBounds) ? raw.overlayBounds : null,
+    cueStyle: normalizeCueStyle(raw?.cueStyle),
+    subtitleLanguage: raw?.subtitleLanguage === "eng" ? "eng" : "rum",
+    exportDirectory: typeof raw?.exportDirectory === "string" && raw.exportDirectory.trim()
+      ? raw.exportDirectory
+      : null,
+    cursorSize: Math.max(16, Math.min(40, Math.round(Number(raw?.cursorSize) || 24))),
+    replaySeconds: replayBuffer(raw?.replaySeconds),
+    replayAutoStart: raw?.replayAutoStart !== false,
+    replayFps: replayFps(raw?.replayFps),
+    replayHeight: replayHeight(raw?.replayHeight),
+    replayMic: raw?.replayMic !== false,
+    replayMicDeviceId: replayDevice(raw?.replayMicDeviceId),
+    replayMicGain: replayGain(raw?.replayMicGain),
+    replaySystemAudio: raw?.replaySystemAudio !== false,
+    replaySystemGain: replayGain(raw?.replaySystemGain),
+    replayNoiseSuppression: raw?.replayNoiseSuppression === true,
+    replayEchoCancellation: raw?.replayEchoCancellation === true,
+    replayBitrateKbps: replayBitrate(raw?.replayBitrateKbps),
+    replayAccelerator: replayAccelerator(raw?.replayAccelerator),
+    replayDirectory: typeof raw?.replayDirectory === "string" && raw.replayDirectory.trim()
+      ? raw.replayDirectory
+      : null,
   };
 }
 

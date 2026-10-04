@@ -1,0 +1,43 @@
+import { describe, expect, it } from "vitest";
+import { buildSaveArgs, concatLine, pictureBroken, replayFileName, segmentsToDrop, replayDimensions, replayBuffer, replayTail } from "./replay";
+
+describe("capture sizing and duration", () => {
+  it("scales the full screen without stretching, cropping or upscaling", () => {
+    expect(replayDimensions(3840, 2160, 720)).toEqual({ width: 1280, height: 720 });
+    expect(replayDimensions(3440, 1440, 720)).toEqual({ width: 1720, height: 720 });
+    expect(replayDimensions(1080, 1920, 720)).toEqual({ width: 406, height: 720 });
+    expect(replayDimensions(640, 480, 1080)).toEqual({ width: 640, height: 480 });
+  });
+  it("accepts custom seconds and covers the window after a partial save", () => {
+    expect(replayBuffer(73)).toBe(73);
+    expect(replayBuffer(0)).toBe(60);
+    expect(replayBuffer(9999)).toBe(900);
+    expect(replayTail([{ duration: 4 }, { duration: 4 }, { duration: 1 }], 5)).toEqual([{ duration: 4 }, { duration: 1 }]);
+  });
+});
+
+describe("segmentsToDrop", () => {
+  it("keeps the segment being written and the requested window", () => {
+    expect(segmentsToDrop(1, 4, 30)).toBe(0);
+    expect(segmentsToDrop(9, 4, 30)).toBe(0);
+    expect(segmentsToDrop(10, 4, 30)).toBe(1);
+    expect(segmentsToDrop(20, 4, 30)).toBe(11);
+  });
+});
+
+describe("save", () => {
+  it("escapes concat paths and can re-encode when a copy will not mux", () => {
+    expect(concatLine("C:\\Clips\\it's.mp4")).toBe("file 'C:/Clips/it'\\''s.mp4'");
+    const copy = buildSaveArgs("list.txt", "out.mp4", true);
+    expect(copy).toContain("copy");
+    expect(copy).not.toContain("libx264");
+    const encoded = buildSaveArgs("list.txt", "out.mp4", false);
+    expect(encoded).toContain("libx264");
+    expect(encoded).not.toContain("copy");
+    expect(replayFileName(new Date(2026, 9, 4, 14, 5, 2))).toBe(
+      "Replay 2026-10-04 14-05-02.mp4",
+    );
+    expect(pictureBroken("Invalid NAL unit 0, skipping.")).toBe(true);
+    expect(pictureBroken("")).toBe(false);
+  });
+});

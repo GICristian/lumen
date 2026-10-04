@@ -198,6 +198,18 @@ async function grabFrame(
   return true;
 }
 
+/** One still from a local file. The caller deletes the jpeg. */
+export async function capturePoster(filePath: string, output: string): Promise<boolean> {
+  try {
+    await fs.mkdir(path.dirname(output), { recursive: true });
+    if (await grabFrame(filePath, output, "1", false)) return true;
+    return await grabFrame(filePath, output, "0", false);
+  } catch (error) {
+    console.error("poster failed", filePath, error);
+    return false;
+  }
+}
+
 async function makeThumbnail(
   filePath: string,
   cacheDir: string,
@@ -212,8 +224,6 @@ async function makeThumbnail(
     } catch {
       // Generate a new frame.
     }
-    const probed = await probeFile(filePath);
-    if (probed.videoCodec === "av1" || probed.videoCodec === "av01") return null;
     const first = duration !== null && duration < 1 ? "0" : "1";
     const attempts: Array<[string, boolean]> = [
       [first, false],
@@ -251,7 +261,7 @@ export function previewClip(filePath: string, cacheDir: string): Promise<string 
 async function makePreview(filePath: string, cacheDir: string): Promise<string | null> {
   try {
     await fs.mkdir(cacheDir, { recursive: true });
-    const output = path.join(cacheDir, `${await cacheKey(filePath)}-preview.mp4`);
+    const output = path.join(cacheDir, `${await cacheKey(filePath)}-preview-v2.mp4`);
     try {
       await fs.access(output);
       return output;
@@ -262,7 +272,6 @@ async function makePreview(filePath: string, cacheDir: string): Promise<string |
       "-y",
       "-i",
       filePath,
-      "-an",
       "-vf",
       "scale=960:-2",
       "-c:v",
@@ -271,6 +280,12 @@ async function makePreview(filePath: string, cacheDir: string): Promise<string |
       "ultrafast",
       "-crf",
       "30",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "128k",
+      "-ac",
+      "2",
       "-movflags",
       "+faststart",
       output,
@@ -315,7 +330,7 @@ export async function startExport(
     throw new Error("File not found");
   }
 
-  const directory = path.dirname(request.sourcePath);
+  const directory = request.outputPath ? path.dirname(request.outputPath) : path.dirname(request.sourcePath);
   let names: string[] = [];
   try {
     names = await fs.readdir(directory);
@@ -325,7 +340,10 @@ export async function startExport(
   }
 
   const suffix = request.crop || request.precise ? "edit" : "trim";
-  const output = nextOutputPath(request.sourcePath, suffix, names);
+  const output = request.outputPath ?? nextOutputPath(request.sourcePath, suffix, names);
+  if (path.resolve(output).toLowerCase() === path.resolve(request.sourcePath).toLowerCase()) {
+    throw new Error("Choose a different name from the source clip");
+  }
   const span =
     request.start !== null && request.end !== null
       ? Math.max(0.01, request.end - request.start)

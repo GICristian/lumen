@@ -37,6 +37,7 @@ export function useOsd(): [string | null, (text: string) => void] {
     if (timer.current !== null) window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => setText(null), 800);
   }, []);
+  useEffect(() => () => { if (timer.current !== null) window.clearTimeout(timer.current); }, []);
   return [text, show];
 }
 
@@ -54,12 +55,35 @@ export function useChromeFade(playing: boolean): boolean {
         return;
       }
       timer.current = window.setTimeout(() => {
+        const keyboardFocus = document.activeElement?.matches(":focus-visible") && document.activeElement.closest(".player-chrome, .titlebar, .zoom-controls");
+        if (keyboardFocus || document.querySelector(".player-chrome:hover, .zoom-controls:hover")) {
+          arm();
+          return;
+        }
         visibleRef.current = false;
         setVisible(false);
-      }, 2500);
+      }, 1800);
     };
 
-    const onMove = (): void => {
+    const reveal = (): void => {
+      visibleRef.current = true;
+      setVisible(true);
+      arm();
+    };
+
+    const last = { x: Number.NaN, y: Number.NaN };
+    const onMove = (event: MouseEvent): void => {
+      if (!Number.isFinite(last.x)) {
+        last.x = event.clientX;
+        last.y = event.clientY;
+        arm();
+        return;
+      }
+      const moved =
+        Math.abs(event.clientX - last.x) >= 8 || Math.abs(event.clientY - last.y) >= 8;
+      if (!moved) return;
+      last.x = event.clientX;
+      last.y = event.clientY;
       if (!visibleRef.current) {
         visibleRef.current = true;
         setVisible(true);
@@ -67,10 +91,16 @@ export function useChromeFade(playing: boolean): boolean {
       arm();
     };
 
-    onMove();
+    arm();
     window.addEventListener("mousemove", onMove);
+    window.addEventListener("keydown", reveal);
+    window.addEventListener("focusin", reveal);
+    window.addEventListener("pointerdown", reveal);
     return () => {
       window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("keydown", reveal);
+      window.removeEventListener("focusin", reveal);
+      window.removeEventListener("pointerdown", reveal);
       if (timer.current !== null) window.clearTimeout(timer.current);
     };
   }, [playing]);

@@ -48,9 +48,14 @@ No accounts, no network API, no database. Preferences live in a JSON file under 
 ## Window and session
 
 - One window. Minimum size 960×600. Bounds restored from settings.
-- Custom title bar: wordmark, current file name, minimize, maximize, close.
+- Custom title bar: the Lumen mark, current file name, minimize, maximize, close.
 - `requestSingleInstanceLock`. A second launch focuses the existing window and opens the file path from the new argv.
-- Open sources, in order of precedence when several arrive together: argv file path, drag-and-drop (first recognized video), nothing (empty state with “Open a video”).
+- A click on the tray icon opens the hub. Open overlay stays on the tray menu. While replay is recording, the tray icon gains a red mark, the tooltip says recording, and the menu shows Recording.
+- Replay keeps a short local buffer of the display under the cursor, system audio, and the microphone. It is off until Start is pressed. Desktop capture supplies the picture and the system sound; the microphone is mixed in when it is on. The buffer is a ring of 4-second segments, deleted when replay stops or Lumen quits. Save joins those segments into an mp4, copying them when the codec allows and re-encoding when the copy will not decode. A file Windows can decode shows its frame in Explorer, with the Lumen mark only as the small corner badge. The default save shortcut is Ctrl+Alt+Shift+R, so Alt+Z stays free. Length, frame rate, 720p or 1080p, microphone, shortcut, and folder are in the hub Replay page and in the overlay replay menu. A small card with a red dot stays anchored just above the taskbar while it is armed, and clicking it opens the overlay. DRM video can come out black.
+- The player title bar is the mark, the file name, a Hub button, and the window controls. Hub always leaves the current view and returns there.
+- The window opens on a hub: Player, Library, Overlay, Replay, Settings, Studio, and Vault as cards. Each card has its own light and a filled icon well, so the home screen is not a flat black field. A file from argv, a drag, or Open leaves the hub and plays. The mark in the player title bar returns to the hub and pauses. With nothing open, the hub is the home. The player’s empty state remains for a folder with no clip selected.
+- Settings holds the overlay shortcut, the vault shortcut, launch-on-startup, and the fixed player keys. Player keys stay as they are. Alt+Z stays free for the graphics overlay.
+- The vault opens from the hub and from its shortcut (default Ctrl+Alt+Shift+V). A password of at least 6 characters derives a key with scrypt; files and the catalog are AES-256-GCM under `userData/store`, with random ids and no video extension. The password is never written to disk. A forgotten password cannot be recovered. Move-in deletes the original only after encryption succeeds. Playback decrypts to `store/play` and that folder is deleted on lock and on the next launch. It is never scanned as a library folder. Each clip keeps an encrypted still, shown as a poster in a centered grid. From the player, the mark and the Vault control return to that grid without locking. Back on the vault locks it and returns to the hub.
 - An Open button uses the native file dialog, filtered to the supported extensions.
 - Drag-and-drop of a video onto the window replaces the current file and refreshes the folder list.
 
@@ -72,7 +77,7 @@ HEVC playback is best-effort through the OS decoder. If the video element errors
 
 ## Layout
 
-Dark, near-black background (`#06070b`), hairline translucent borders, ice-mint accent (`#5CE1FF`), primary text `#E8EEF7`, muted text `#8B95A8`. Panels use 16px radius. The UI font is bundled (Outfit, OFL) so the look does not depend on the network. The wordmark uses the same family with wide tracking.
+Dark, near-black background (`#06070b`), hairline translucent borders, ice-mint accent (`#5CE1FF`), primary text `#E8EEF7`, muted text `#8B95A8`. Panels use 16px radius. The UI font is bundled (Outfit, OFL) so the look does not depend on the network. The logo is the gold play emblem. The hub and the empty player show the full lockup, mark plus the LUMEN word. The tray, the taskbar, the title bar, and the icon on video files use the mark alone.
 
 ```
 LUMEN          clip-name.mp4                 — □ ✕
@@ -87,12 +92,12 @@ LUMEN          clip-name.mp4                 — □ ✕
 ```
 
 - The folder column is 280px, collapsible. `M` toggles it. The choice is remembered in settings.
-- While playing, the title bar and transport fade out 2.5s after the last mouse move. They return on mousemove. The timeline stays visible so a click or drag can land on any second. The keyboard keeps working while the other controls are hidden.
+- While playing, the title bar, the bottom chrome (seek bar and controls), and the zoom controls fade out 1.8s after the pointer moves at least 8px, and the cursor hides with them. A subtitle line changing on screen does not count. The next real move brings the cursor and the chrome back together. The keyboard keeps working while the controls are hidden. An open settings menu keeps the cursor and the chrome visible. Subtitle height can sit on the bottom edge of the picture.
 - While paused, controls stay visible.
 - Click on the video toggles play/pause. Double-click toggles fullscreen and does not change play state.
 - Scroll zooms toward the cursor, from 100% to 800%. The picture moves with a compositor transform updated once per frame. Wheel input is not applied through React state.
-- Fullscreen hides the folder column and lays the title bar, timeline, and transport over the picture, so the whole frame fills the window. Leaving fullscreen restores the folder if it was open.
-- Empty state: centered “Open a video” and a short line listing the keyboard shortcuts for seek, volume, and folder navigation.
+- Fullscreen hides the folder column. The title bar and the bottom chrome sit over the picture, so the whole frame fills the window. Leaving fullscreen restores the folder if it was open. Hovering the seek bar shows the time and a frame from a second, muted video. That preview does not move the playing clip.
+- Empty state: the Lumen lockup, then “Open a video” and a short line listing the keyboard shortcuts for seek, volume, and folder navigation.
 
 ## Keyboard
 
@@ -171,7 +176,7 @@ Refreshing the same OSD restarts the 800ms timer.
 
 Ctrl+Alt+L, or the shortcut saved in settings, opens a borderless always-on-top window on the monitor under the cursor. The window is opaque (`#07080d`), the desktop stays visible around it, and the window can be resized. Its size is remembered. It lists the last folder, newest clip first, and can switch among the eight most recent folders. Search filters by name. Sort can switch to name, oldest, or largest. A checkbox, Ctrl+click, or Shift+click selects clips, and Delete removes those files from disk after confirmation. The player folder list does the same. Browse adds a folder; the folder dialog is owned by the overlay and the window drops below it while the dialog is open.
 
-Clip cards are grid items with an explicit minimum height, so the row cannot squash a 16:9 frame into a line. Sidebar rows use a fixed 128×72 thumbnail. Cached jpeg posters are requested only for clips on screen. AV1 captures, which this ffmpeg build cannot decode, show a paused frame from the same video element that plays the clip, and only while that card is on screen. Hover waits a short moment, then plays that same file muted, with a mini seek bar. Hover does not transcode. A file the video element cannot decode still gets an H.264 proxy, and only after it is opened. Opening the overlay focuses it and defocuses the game. Closing it returns focus to the game. The pointer is not confined. A still frame, once drawn, stays on the card when it scrolls off screen. Closing the player pauses the clip, hides its window, and leaves Lumen in the tray. Opening a file or the player from the tray shows that window again. Quit on the tray icon exits.
+Clip cards are grid items with an explicit minimum height, so the row cannot squash a 16:9 frame into a line. Sidebar rows use a fixed 128×72 thumbnail. Cached jpeg posters are requested only for clips on screen. Cards wait for that jpeg and do not open a video decoder to paint the grid. AV1 captures, which this ffmpeg build cannot decode, grab one 480-wide frame while the card is on screen, keep that image, and release the decoder. One of those grabs runs at a time. Hover scales that poster slightly and shows a play mark. It does not start another decoder. A file the video element cannot decode still gets an H.264 proxy, and only after it is opened. The folder, sort, and overlay settings are custom menus, in the same card language as the player. Opening the overlay focuses it and defocuses the game. A click outside the overlay closes it, pauses a playing clip, and returns focus to the game. The same pause happens for every other close. The pointer is not confined. Closing the player pauses the clip, hides its window, and leaves Lumen in the tray. Opening a file or the player from the tray shows that window again. Quit on the tray icon exits.
 
 Opening a clip shows a Back control, a volume slider, and a length bar. Trim stays off until Trim is pressed. Then the bar shows a draggable segment: the ends set in and out, the body moves the whole span, and a click seeks. Playback loops inside that span. Download uses the span only while Trim is on; otherwise it exports the whole clip, and writes it next to the source. Original copies the stream when there is no trim that forces a reencode. AV1 is always copied, because this ffmpeg cannot decode it. Small, Balanced, and High set a video bitrate and show a live size estimate. Space toggles play unless focus is in a text field. Set overlay stores the shortcut and whether Lumen starts hidden with Windows. Alt+Z is left for NVIDIA. The window close button hides the player; Quit is on the tray icon. The Windows icon and version resource name are Lumen.
 
@@ -202,19 +207,19 @@ Export writes a new file in the same directory as the source. It never writes th
 
 | Mode | When | File name | ffmpeg |
 |---|---|---|---|
-| Fast trim | A and B set, crop mode off, Precise off | `{stem}_trim.mp4` | stream copy |
-| Precise trim | A and B set, crop mode off, Precise on | `{stem}_edit.mp4` | libx264 + aac |
+| Fast trim | A and B set, crop mode off, Precise off, and the video is AV1 | `{stem}_trim.mp4` | stream copy, keyframe snap |
+| Precise trim | A and B set, and the video is not AV1 | `{stem}_edit.mp4` | libx264 + aac, exact duration |
 | Crop | Crop mode on. A and B optional | `{stem}_edit.mp4` | crop filter + libx264 + aac |
 
 Rules:
 
 - Export is disabled until the source is loaded and ffmpeg is idle.
-- Fast trim and precise trim require both A and B. If one mark is missing, the Export control explains “Set in and out with I and O”.
+- A marked trim re-encodes so the file lasts exactly from In to Out. AV1 stays a stream copy, which still lands on a keyframe. Export is on the bar only while both marks, or a crop, are set.
 - If only a crop is active and A/B are missing, the export uses the full duration.
 - If crop mode is on and A/B are set, the export applies both the time range and the crop.
 - Crop forces a re-encode. The Precise switch shows on and disabled while crop mode is on.
 - Precise defaults to off and is persisted.
-- Fast trim UI copy, always visible when that mode will be used: “Fast trim cuts on the nearest keyframe.”
+- The hub has no Continue strip. Home pauses the video. Open it again from Library or Player.
 
 Time range for ffmpeg: start = A or 0, end = B or duration.
 
@@ -227,7 +232,7 @@ ffmpeg -y -ss {start} -to {end} -i {input} -map 0:v -map 0:a? -c copy -avoid_neg
 Precise trim arguments:
 
 ```
-ffmpeg -y -ss {start} -to {end} -i {input} -map 0:v -map 0:a? -c:v libx264 -preset veryfast -crf 18 -c:a aac -b:a 192k -movflags +faststart -progress pipe:1 {output}
+ffmpeg -y -i {input} -ss {start} -t {duration} -map 0:v -map 0:a? -c:v libx264 -preset veryfast -crf 18 -c:a aac -b:a 192k -movflags +faststart -progress pipe:1 {output}
 ```
 
 Crop arguments (start/end omitted when exporting the full file):
@@ -249,9 +254,7 @@ Only one export runs at a time. Enter and the Export button do nothing while a j
 Windows 10 and 11 do not allow an app to silently replace the user default. Lumen does two things:
 
 1. The NSIS installer registers a ProgID and file associations for the six extensions, so Lumen appears in Open with.
-2. A gear in the title bar opens a menu with one action, “Set as default player”, which opens `ms-settings:defaultapps`. Helper copy under the action: “In Default apps, choose Lumen for video files. You can also right-click a clip, then Open with, Lumen, Always.”
-
-Precise trim stays next to Export, not in this menu.
+2. Settings open from a gear on the bottom chrome: playback (loop, precise, crop, speed), subtitles (search, delay, autosync, and appearance on that same page), and app. Trim In, Out, and Clear stay on the bar. Open folder is on the title bar and on the bar. “Set as default player” opens `ms-settings:defaultapps`. Subtitles can also be dropped onto the picture.
 
 Dev runs (`npm run dev`) accept a file path argument but do not register associations. Registration belongs to the installed build.
 
@@ -260,10 +263,19 @@ Dev runs (`npm run dev`) accept a file path argument but do not register associa
 - `volume` (0..1, default 1)
 - `loop` (boolean, default false)
 - `preciseTrim` (boolean, default false)
+- `cueStyle` (subtitle size, color, background, outline, height)
+- `subtitleLanguage` (`rum` or `eng`, default `rum`)
 - `folderOpen` (boolean, default true)
 - `windowBounds` (`{ x, y, width, height }`)
+- `cursorSize` (16..40, default 24)
+- `replaySeconds` (30, 60, 120, or 300, default 60)
+- `replayFps` (30 or 60, default 30)
+- `replayHeight` (720 or 1080, default 1080)
+- `replayMic` (boolean, default true)
+- `replayAccelerator` (default Ctrl+Alt+Shift+R)
+- `replayDirectory` (folder, or Videos/Lumen when empty)
 
-A–B marks, crop rect, and the current file path are not persisted.
+Replay stays off across launches. A–B marks, crop rect, subtitle delay, and the current file path are not persisted.
 
 ## Errors
 

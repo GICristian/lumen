@@ -3,6 +3,8 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { mediaFileResponse } from "./mediaFile";
 import { installShell } from "./overlayHost";
+import { initReplay, stopReplay } from "./replayHost";
+import { initVault, vaultLock } from "./vault";
 import { videoArg } from "./library";
 import { hideToTray, registerIpc, revealWindow } from "./ipc";
 import { getSettings, initSettings, patchSettings } from "./settings";
@@ -36,6 +38,11 @@ function showMain(): void {
   if (!mainWindow || mainWindow.isDestroyed()) createWindow(true);
   if (!mainWindow) return;
   revealWindow(mainWindow);
+}
+
+function showHub(): void {
+  showMain();
+  mainWindow?.webContents.send("lumen:home");
 }
 
 function queueBoundsSave(): void {
@@ -126,6 +133,7 @@ if (!gotLock) {
 
     await initSettings(app.getPath("userData"));
     const userData = app.getPath("userData");
+    await initVault(path.join(userData, "store"));
     registerIpc(
       ipcMain,
       () => mainWindow,
@@ -134,11 +142,21 @@ if (!gotLock) {
     );
     app.setAppUserModelId("com.lumen.player");
     createWindow();
-    installShell({ iconPath: appIcon(), showPlayer: showMain });
+    installShell({
+      iconPath: appIcon(),
+      showPlayer: showHub,
+      showVault: () => {
+        showMain();
+        mainWindow?.webContents.send("vault:open");
+      },
+    });
+    initReplay(path.join(userData, "replay-buffer"));
   });
 
   app.on("before-quit", () => {
     quitting = true;
+    stopReplay();
+    void vaultLock();
   });
 
   app.on("window-all-closed", () => {

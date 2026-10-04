@@ -1,27 +1,59 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ClipSort } from "@shared/clips";
 import { filterClips, sortClips } from "@shared/clips";
 import type { ExportRequest, FolderItem, Settings } from "@shared/contracts";
 import { folderLabels } from "@shared/folders";
 import { acceleratorFromEvent } from "@shared/shortcut";
 import { fileName } from "../player/usePlayback";
+import { lumenCursor } from "../player/cursor";
 import { usePosters } from "../player/usePosters";
+import { BrandMark } from "./BrandMark";
 import { ClipCard, SideClip } from "./ClipCard";
+import { Icon } from "./Icon";
 import { DeleteClips } from "./DeleteClips";
 import { OverlayDetail } from "./OverlayDetail";
+import { OverlayPreview } from "./OverlayPreview";
+import { ReplayPanel } from "./ReplayPanel";
 import { useClipSelection } from "../player/useSelection";
+import { useIdleCursor } from "../player/useIdleCursor";
 
 const emptySettings: Settings = {
   volume: 1,
   loop: false,
   preciseTrim: false,
   folderOpen: true,
+  libraryPinned: false,
   windowBounds: null,
   lastFolder: null,
   recentFolders: [],
   overlayAccelerator: "Ctrl+Alt+L",
+  vaultAccelerator: "Ctrl+Alt+Shift+V",
   launchOnStartup: false,
   overlayBounds: null,
+  cueStyle: {
+    size: 22,
+    color: "#ffffff",
+    backdrop: 0.72,
+    outline: 2,
+    lift: 10,
+  },
+  subtitleLanguage: "rum",
+  exportDirectory: null,
+  cursorSize: 24,
+  replaySeconds: 60,
+  replayAutoStart: true,
+  replayFps: 30,
+  replayHeight: 1080,
+  replayMic: true,
+  replayMicDeviceId: "",
+  replayMicGain: 1,
+  replaySystemAudio: true,
+  replaySystemGain: 1,
+  replayNoiseSuppression: false,
+  replayEchoCancellation: false,
+  replayBitrateKbps: 8000,
+  replayAccelerator: "Ctrl+Alt+Shift+R",
+  replayDirectory: null,
 };
 
 const sorts: { id: ClipSort; label: string }[] = [
@@ -32,16 +64,23 @@ const sorts: { id: ClipSort; label: string }[] = [
 ];
 
 export function OverlayApp() {
+  const cursorIdle = useIdleCursor();
   const jobRef = useRef<string | null>(null);
+  const barRef = useRef<HTMLElement>(null);
   const [settings, setSettings] = useState<Settings>(emptySettings);
   const [folder, setFolder] = useState<string | null>(null);
   const [items, setItems] = useState<FolderItem[]>([]);
   const [playing, setPlaying] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<ClipSort>("recent");
+  const [thumbSize, setThumbSize] = useState(72);
   const [hoverPath, setHoverPath] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [replayOpen, setReplayOpen] = useState(false);
+  const [replayOn, setReplayOn] = useState(false);
+  const [folderMenu, setFolderMenu] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [toast, setToast] = useState<{ text: string; path?: string } | null>(null);
@@ -66,17 +105,34 @@ export function OverlayApp() {
   }, []);
 
   useEffect(() => {
-    void window.lumen.getSettings().then((stored) => {
-      setSettings(stored);
-      if (stored.lastFolder) void loadFolder(stored.lastFolder);
-    });
-    return window.lumen.onOverlayOpen(() => {
-      void window.lumen.getSettings().then((stored) => {
+    let generation = 0;
+    const open = async (file?: string): Promise<void> => {
+      const token = ++generation;
+      try {
+        const pending = await window.lumen.overlayPendingFile();
+        const target = file ?? pending;
+        const stored = await window.lumen.getSettings();
+        if (token !== generation) return;
         setSettings(stored);
-        if (stored.lastFolder) void loadFolder(stored.lastFolder);
-      });
-    });
+        if (target) {
+          const listing = await window.lumen.listFolder(target);
+          if (token !== generation) return;
+          setFolder(listing.folder); setItems(listing.items); setQuery("");
+          setEditing(false); setPlaying(target); setNotice(null);
+          setReplayOpen(false); setSettingsOpen(false);
+        } else if (stored.lastFolder) await loadFolder(stored.lastFolder);
+      } catch (error) { if (token === generation) setNotice(error instanceof Error ? error.message : "Clip could not be opened."); }
+    };
+    const off = window.lumen.onOverlayOpen((file) => void open(file));
+    void open();
+    return () => { generation++; off(); };
   }, [loadFolder]);
+
+  useEffect(() => {
+    const off = window.lumen.onReplayStatus((next) => setReplayOn(next.armed));
+    void window.lumen.replayStatus().then((next) => setReplayOn(next.armed));
+    return off;
+  }, []);
 
   const { posters, request } = usePosters(items);
 
@@ -124,8 +180,30 @@ export function OverlayApp() {
   }, [capturing]);
 
   useEffect(() => {
+    if (!folderMenu && !settingsOpen && !replayOpen) return;
+    const onPointer = (event: PointerEvent): void => {
+      if (!barRef.current?.contains(event.target as Node)) {
+        setFolderMenu(false);
+        setSettingsOpen(false);
+        setReplayOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", onPointer);
+    return () => window.removeEventListener("pointerdown", onPointer);
+  }, [folderMenu, settingsOpen, replayOpen]);
+
+  useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== "Escape" || capturing) return;
+      if (replayOpen) {
+        setReplayOpen(false);
+        return;
+      }
+      if (settingsOpen || folderMenu) {
+        setSettingsOpen(false);
+        setFolderMenu(false);
+        return;
+      }
       if (playing) {
         setPlaying(null);
         return;
@@ -138,7 +216,7 @@ export function OverlayApp() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [capturing, playing, query]);
+  }, [capturing, playing, query, replayOpen, settingsOpen, folderMenu]);
 
   async function chooseFolder(): Promise<void> {
     const picked = await window.lumen.openFolder();
@@ -151,7 +229,13 @@ export function OverlayApp() {
     setProgress(0);
     setNotice(null);
     try {
-      const result = await window.lumen.startExport(request);
+      const outputPath = await window.lumen.chooseExportPath(request.sourcePath, request.precise ? "edit" : "trim");
+      if (!outputPath) {
+        jobRef.current = null;
+        setProgress(null);
+        return;
+      }
+      const result = await window.lumen.startExport({ ...request, outputPath });
       if (jobRef.current === "pending") jobRef.current = result.jobId;
     } catch (error) {
       if (jobRef.current === "pending") jobRef.current = null;
@@ -166,6 +250,7 @@ export function OverlayApp() {
       ? [folder, ...settings.recentFolders]
       : settings.recentFolders;
   const labels = folderLabels(known);
+  const currentLabel = labels.find((item) => item.path === folder)?.label ?? "Choose folder";
   const visible = useMemo(() => sortClips(filterClips(items, query), sort), [items, query, sort]);
   const order = useMemo(() => visible.map((item) => item.path), [visible]);
   const selection = useClipSelection(order);
@@ -191,70 +276,169 @@ export function OverlayApp() {
   }
 
   return (
-    <div className="overlay-shell">
+    <div className={cursorIdle ? "overlay-shell is-cursor-idle" : "overlay-shell"} style={{
+      "--lumen-cursor": lumenCursor(settings.cursorSize),
+    } as CSSProperties}>
       <section className="overlay-panel">
-        <header
+      <header
           className="overlay-bar"
+          ref={barRef}
           onPointerDown={(event) => {
             const target = event.target as HTMLElement;
-            if (target.closest("button, select, input, a")) return;
+            if (target.closest("button, input, a, label")) return;
             window.lumen.dragOverlay();
           }}
         >
-          <div className="wordmark">Lumen</div>
-          <select
-            className="overlay-select"
-            value={folder ?? ""}
-            onChange={(event) => {
-              if (event.target.value) void loadFolder(event.target.value);
-            }}
-          >
-            <option value="" disabled>
-              {folder ? "Folder" : "No folder yet"}
-            </option>
-            {labels.map((item) => (
-              <option key={item.path} value={item.path} title={item.path}>
-                {item.label}
-              </option>
-            ))}
-          </select>
-          <button type="button" className="text-btn" onClick={() => void chooseFolder()}>
-            Browse
-          </button>
+          <BrandMark className="brand-mark-svg" />
+          <div className="folder-anchor">
+            <button
+              type="button"
+              className="folder-current"
+              aria-expanded={folderMenu}
+              onClick={() => {
+                setSettingsOpen(false);
+                setReplayOpen(false);
+                setFolderMenu((value) => !value);
+              }}
+            >
+              <Icon name="folder" />
+              <span>{currentLabel}</span>
+            </button>
+            {folderMenu ? (
+              <div className="menu-pop">
+                {labels.map((item) => (
+                  <button
+                    key={item.path}
+                    type="button"
+                    className={item.path === folder ? "menu-row is-on" : "menu-row"}
+                    title={item.path}
+                    onClick={() => {
+                      setFolderMenu(false);
+                      void loadFolder(item.path);
+                    }}
+                  >
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="menu-row"
+                  onClick={() => {
+                    setFolderMenu(false);
+                    void chooseFolder();
+                  }}
+                >
+                  <span>Browse…</span>
+                </button>
+              </div>
+            ) : null}
+          </div>
+          <div className="overlay-spacer" />
+          <div className="settings-anchor">
+            <button
+              type="button"
+              className={replayOn ? "icon-btn is-live" : replayOpen ? "icon-btn is-on" : "icon-btn"}
+              aria-label="Replay"
+              aria-expanded={replayOpen}
+              onClick={() => {
+                setFolderMenu(false);
+                setSettingsOpen(false);
+                setCapturing(false);
+                setReplayOpen((value) => !value);
+              }}
+            >
+              <Icon name="record" />
+            </button>
+            {replayOpen ? (
+              <div className="menu-pop is-replay">
+                <ReplayPanel compact />
+              </div>
+            ) : null}
+          </div>
+          <div className="settings-anchor">
+            <button
+              type="button"
+              className={settingsOpen ? "icon-btn is-on" : "icon-btn"}
+              aria-label="Overlay settings"
+              aria-expanded={settingsOpen}
+              onClick={() => {
+                setFolderMenu(false);
+                setReplayOpen(false);
+                setSettingsOpen((value) => !value);
+              }}
+            >
+              <Icon name="gear" />
+            </button>
+            {settingsOpen ? (
+              <div className="menu-pop is-settings">
+                <p className="menu-note">
+                  Shortcut {settings.overlayAccelerator}. Alt+Z stays with NVIDIA.
+                </p>
+                <button type="button" className="menu-row" onClick={() => setCapturing(true)}>
+                  <span>
+                    {capturing ? "Press Ctrl, Alt, or Shift with a key" : "Change shortcut"}
+                  </span>
+                </button>
+                <label className="menu-row is-static overlay-cursor-row">
+                  <span>Cursor size</span>
+                  <input type="range" min={16} max={40} step={2} value={settings.cursorSize} aria-label="Cursor size" onChange={(event) => {
+                    const cursorSize = Number(event.target.value);
+                    setSettings((current) => ({ ...current, cursorSize }));
+                    void window.lumen.setSettings({ cursorSize });
+                  }} />
+                  <em>{settings.cursorSize}px</em>
+                </label>
+                <label className="menu-row is-static">
+                  <span>Start with Windows</span>
+                  <input
+                    type="checkbox"
+                    checked={settings.launchOnStartup}
+                    onChange={(event) => {
+                      void window.lumen.setLaunchOnStartup(event.target.checked).then(setSettings);
+                    }}
+                  />
+                </label>
+              </div>
+            ) : null}
+          </div>
           <button
             type="button"
-            className={settingsOpen ? "text-btn is-on" : "text-btn"}
-            onClick={() => setSettingsOpen((value) => !value)}
+            className="icon-btn"
+            aria-label="Close"
+            onClick={() => window.lumen.hideOverlay()}
           >
-            Set overlay
-          </button>
-          <button type="button" className="text-btn" onClick={() => window.lumen.hideOverlay()}>
-            Close
+            <Icon name="close" />
           </button>
         </header>
         <div className="overlay-tools">
-          <input
-            className="overlay-search"
-            type="search"
-            value={query}
-            placeholder="Search clips"
-            aria-label="Search clips"
-            onChange={(event) => setQuery(event.target.value)}
-          />
-          <select
-            className="overlay-select overlay-sort"
-            value={sort}
-            aria-label="Sort clips"
-            onChange={(event) => setSort(event.target.value as ClipSort)}
-          >
+          <label className="overlay-search">
+            <Icon name="search" />
+            <input
+              type="search"
+              value={query}
+              placeholder="Search clips"
+              aria-label="Search clips"
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </label>
+          <div className="sort-chips" role="radiogroup" aria-label="Sort clips">
             {sorts.map((item) => (
-              <option key={item.id} value={item.id}>
+              <button
+                key={item.id}
+                type="button"
+                className={sort === item.id ? "is-on" : ""}
+                onClick={() => setSort(item.id)}
+              >
                 {item.label}
-              </option>
+              </button>
             ))}
-          </select>
+          </div>
+          <label className="overlay-density" title="Preview size">
+            <span>Size</span>
+            <input type="range" min={48} max={112} step={8} value={thumbSize} aria-label="Preview size" onChange={(event) => setThumbSize(Number(event.target.value))} />
+          </label>
           <span className="overlay-count">
-            {visible.length} {visible.length === 1 ? "clip" : "clips"}
+            {visible.length}
           </span>
           <DeleteClips
             count={selection.selected.length}
@@ -264,28 +448,10 @@ export function OverlayApp() {
             onCancel={() => setConfirmDelete(false)}
           />
         </div>
-        {settingsOpen ? (
-          <div className="overlay-settings">
-            <p>Shortcut: {settings.overlayAccelerator}. Alt+Z stays with NVIDIA.</p>
-            <button type="button" className="text-btn" onClick={() => setCapturing(true)}>
-              {capturing ? "Press Ctrl, Alt, or Shift with a key" : "Change shortcut"}
-            </button>
-            <label className="overlay-check">
-              <input
-                type="checkbox"
-                checked={settings.launchOnStartup}
-                onChange={(event) => {
-                  void window.lumen.setLaunchOnStartup(event.target.checked).then(setSettings);
-                }}
-              />
-              Start with Windows, so the shortcut works after a capture
-            </label>
-          </div>
-        ) : null}
         {notice && !active ? <p className="overlay-notice">{notice}</p> : null}
         {active ? (
           <div className="overlay-watch">
-            <aside className="overlay-side">
+            <aside className="overlay-side" style={{ "--overlay-thumb-size": `${thumbSize}px` } as CSSProperties}>
               {visible.map((item) => (
                 <SideClip
                   key={item.path}
@@ -294,12 +460,13 @@ export function OverlayApp() {
                   active={item.path === active.path}
                   selected={selection.selected.includes(item.path)}
                   onVisible={request}
-                  onOpen={setPlaying}
+                  onOpen={(path) => { setPlaying(path); setEditing(false); }}
                   onSelect={selection.pick}
+                  thumbSize={thumbSize}
                 />
               ))}
             </aside>
-            <OverlayDetail
+            {editing ? <OverlayDetail
               item={active}
               volume={settings.volume}
               busy={jobRef.current !== null || progress !== null}
@@ -318,21 +485,31 @@ export function OverlayApp() {
                 jobRef.current = null;
                 setProgress(null);
               }}
-            />
+            /> : <OverlayPreview
+              item={active}
+              volume={settings.volume}
+              onVolume={(value) => {
+                setSettings((current) => ({ ...current, volume: value }));
+                void window.lumen.setSettings({ volume: value });
+              }}
+              onBack={() => setPlaying(null)}
+              onEdit={() => setEditing(true)}
+            />}
           </div>
         ) : (
-          <div className="overlay-grid">
+          <div className="overlay-grid" style={{ "--overlay-card-min": `${thumbSize * 2.5}px` } as CSSProperties}>
             {visible.length === 0 ? (
               <div className="overlay-empty">
+                <BrandMark className="brand-mark-svg is-large" />
                 <p>
                   {folder
                     ? query
-                      ? "No clips match this search"
-                      : "No clips in this folder"
-                    : "Choose the NVIDIA captures folder"}
+                      ? "Nothing matches that search."
+                      : "This folder has no clips yet."
+                    : "Open the folder where your captures live."}
                 </p>
                 {query ? null : (
-                  <button type="button" className="text-btn" onClick={() => void chooseFolder()}>
+                  <button type="button" className="export-btn" onClick={() => void chooseFolder()}>
                     Browse
                   </button>
                 )}
@@ -347,7 +524,8 @@ export function OverlayApp() {
                   selected={selection.selected.includes(item.path)}
                   onVisible={request}
                   onHover={setHoverPath}
-                  onOpen={setPlaying}
+                  onOpen={(path) => { setPlaying(path); setEditing(false); }}
+                  onEdit={(path) => { setPlaying(path); setEditing(true); }}
                   onSelect={selection.pick}
                 />
               ))

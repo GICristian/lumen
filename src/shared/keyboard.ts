@@ -28,6 +28,7 @@ export function keyAction(event: {
   const tag = event.target?.tagName?.toUpperCase();
   const typing =
     tag === "TEXTAREA" ||
+    tag === "SELECT" ||
     event.target?.isContentEditable ||
     (tag === "INPUT" && event.target?.inputType !== "range");
   if (typing) return null;

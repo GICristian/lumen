@@ -1,5 +1,7 @@
 const ACCELERATOR = /^(Ctrl\+|Alt\+|Shift\+)+([A-Z0-9]|Space|F(?:[1-9]|1[0-2]))$/;
 export const DEFAULT_OVERLAY_SHORTCUT = "Ctrl+Alt+L";
+export const DEFAULT_VAULT_SHORTCUT = "Ctrl+Alt+Shift+V";
+export const DEFAULT_REPLAY_SHORTCUT = "Ctrl+Alt+Shift+R";
 
 export function parseAccelerator(value: string): string | null {
   return ACCELERATOR.test(value) ? value : null;
@@ -8,6 +10,16 @@ export function parseAccelerator(value: string): string | null {
 export function overlayAccelerator(value: unknown): string {
   if (typeof value !== "string") return DEFAULT_OVERLAY_SHORTCUT;
   return parseAccelerator(value) ?? DEFAULT_OVERLAY_SHORTCUT;
+}
+
+export function vaultAccelerator(value: unknown): string {
+  if (typeof value !== "string") return DEFAULT_VAULT_SHORTCUT;
+  return parseAccelerator(value) ?? DEFAULT_VAULT_SHORTCUT;
+}
+
+export function replayAccelerator(value: unknown): string {
+  if (typeof value !== "string") return DEFAULT_REPLAY_SHORTCUT;
+  return parseAccelerator(value) ?? DEFAULT_REPLAY_SHORTCUT;
 }
 
 export function acceleratorFromEvent(event: {

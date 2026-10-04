@@ -16,13 +16,19 @@ import {
   zoomToward,
   type Zoom,
 } from "@shared/zoom";
+import { cueOutline, type CueStyle } from "@shared/cues";
 import { CropOverlay } from "./CropOverlay";
+import { BrandLockup } from "./BrandMark";
+import { Icon } from "./Icon";
+import { PlaybackFeedback } from "./PlaybackFeedback";
 import { mediaUrl } from "../player/usePlayback";
+import { isPlaybackRecovery } from "../player/resumePlayback";
 
 type Frame = { width: number; height: number };
 
 type Props = {
   playablePath: string | null;
+  preparing: boolean;
   volume: number;
   loopWhole: boolean;
   segment: boolean;
@@ -40,10 +46,16 @@ type Props = {
   onTime: (time: number) => void;
   onReady: (duration: number, frame: Frame) => void;
   onPlaying: (playing: boolean) => void;
+  playing: boolean;
+  rate: number;
   onTogglePlay: () => void;
   onFullscreen: () => void;
   onError: () => void;
   onOpen: () => void;
+  cueText: string | null;
+  cueStyle: CueStyle;
+  dropHint: "subtitle" | "video" | null;
+  notice: string | null;
   videoRef: React.RefObject<HTMLVideoElement | null>;
 };
 
@@ -60,6 +72,9 @@ export const VideoStage = forwardRef<VideoStageHandle, Props>(function VideoStag
   const pictureRef = useRef<HTMLDivElement>(null);
   const [container, setContainer] = useState<ScreenBox | null>(null);
   const [zoomEpoch, setZoomEpoch] = useState(0);
+  const [buffering, setBuffering] = useState(false);
+  const [readyPath, setReadyPath] = useState<string | null>(null);
+  const loading = props.preparing || Boolean(props.playablePath && readyPath !== props.playablePath);
   const clickTimer = useRef<number | null>(null);
   const suppressClick = useRef(false);
   const zoomRef = useRef<Zoom>(identity);
@@ -73,11 +88,15 @@ export const VideoStage = forwardRef<VideoStageHandle, Props>(function VideoStag
 
   useEffect(() => {
     zoomRef.current = identity;
+    setBuffering(false);
+    setReadyPath(null);
     const picture = pictureRef.current;
     if (picture) picture.style.transform = "translate3d(0px, 0px, 0) scale(1)";
     wrapRef.current?.classList.remove("is-zoomed");
     if (labelRef.current) labelRef.current.textContent = "100%";
   }, [props.playablePath]);
+
+  useEffect(() => () => { if (clickTimer.current !== null) window.clearTimeout(clickTimer.current); }, []);
 
   useEffect(() => {
     const element = wrapRef.current;
@@ -327,12 +346,19 @@ export const VideoStage = forwardRef<VideoStageHandle, Props>(function VideoStag
 
   return (
     <div
-      className={shown.scale > 1 ? "video-wrap is-zoomed" : "video-wrap"}
+      className={`video-wrap${shown.scale > 1 ? " is-zoomed" : ""}${loading ? " is-loading" : ""}`}
       ref={wrapRef}
       onPointerDown={props.playablePath ? onPointerDown : undefined}
       onClick={props.playablePath ? onClick : undefined}
       onDoubleClick={props.playablePath ? onDoubleClick : undefined}
     >
+      {props.dropHint ? (
+        <div className={props.dropHint === "subtitle" ? "sub-drop" : "sub-drop is-video"}>
+          <strong>{props.dropHint === "subtitle" ? "Drop subtitle" : "Drop video"}</strong>
+          <span>{props.dropHint === "subtitle" ? ".srt or .vtt" : "Open this clip"}</span>
+        </div>
+      ) : null}
+      {props.notice ? <div className="sub-notice">{props.notice}</div> : null}
       {props.playablePath && videoBox ? (
         <div
           className="picture"
@@ -346,6 +372,7 @@ export const VideoStage = forwardRef<VideoStageHandle, Props>(function VideoStag
           }}
         >
           <video
+            key={props.playablePath}
             ref={props.videoRef}
             src={mediaUrl(props.playablePath)}
             loop={props.loopWhole && !props.segment}
@@ -353,16 +380,48 @@ export const VideoStage = forwardRef<VideoStageHandle, Props>(function VideoStag
             onLoadedMetadata={(event) => {
               const video = event.currentTarget;
               video.volume = props.volume;
+              video.playbackRate = props.rate;
               props.onReady(video.duration, {
                 width: video.videoWidth,
                 height: video.videoHeight,
               });
-              void video.play().catch(() => props.onPlaying(false));
+              if (!isPlaybackRecovery(video)) void video.play().catch(() => props.onPlaying(false));
             }}
             onPlay={() => props.onPlaying(true)}
-            onPause={() => props.onPlaying(false)}
-            onError={() => props.onError()}
+            onLoadedData={() => setReadyPath(props.playablePath)}
+            onWaiting={() => setBuffering(true)}
+            onPlaying={() => { setBuffering(false); setReadyPath(props.playablePath); }}
+            onCanPlay={() => { setBuffering(false); setReadyPath(props.playablePath); }}
+            onPause={() => { props.onPlaying(false); setBuffering(false); }}
+            onError={() => { setBuffering(false); props.onError(); }}
           />
+          {props.playablePath && !props.playing && !loading && !buffering ? (
+            <div className="center-play" aria-hidden="true">
+              <Icon name="play" />
+            </div>
+          ) : null}
+          {props.cueText ? (
+            <p
+              className="cue-line"
+              style={{
+                bottom: `${props.cueStyle.lift}%`,
+                fontSize: props.cueStyle.size,
+                color: props.cueStyle.color,
+              }}
+            >
+              {props.cueText.split("\n").map((line, index) => (
+                <span
+                  key={`${index}-${line}`}
+                  style={{
+                    background: `rgba(0, 0, 0, ${props.cueStyle.backdrop})`,
+                    textShadow: cueOutline(props.cueStyle.outline),
+                  }}
+                >
+                  {line}
+                </span>
+              ))}
+            </p>
+          ) : null}
         </div>
       ) : null}
       {props.cropMode && props.cropRect && props.frame && cropBox ? (
@@ -384,25 +443,28 @@ export const VideoStage = forwardRef<VideoStageHandle, Props>(function VideoStag
         >
           <button
             type="button"
+            aria-label="Zoom out" data-tooltip="Zoom out · −"
             onClick={() => applyZoom(nextZoomScale(zoomRef.current.scale, false), null)}
           >
             −
           </button>
-          <button type="button" ref={labelRef} onClick={() => paint(identity)}>
+          <button type="button" ref={labelRef} aria-label="Reset zoom" data-tooltip="Fit picture · 0" onClick={() => paint(identity)}>
             {Math.round(shown.scale * 100)}%
           </button>
           <button
             type="button"
+            aria-label="Zoom in" data-tooltip="Zoom in · +"
             onClick={() => applyZoom(nextZoomScale(zoomRef.current.scale, true), null)}
           >
             +
           </button>
         </div>
       ) : null}
-      {props.osd ? <div className="osd">{props.osd}</div> : null}
+      {props.osd ? <PlaybackFeedback text={props.osd} /> : null}
+      {!props.empty && (loading || buffering) && !props.banner ? <div className="playback-loading" role="status"><span className="loading-ring" /><span>{loading ? "Opening video" : "Buffering"}</span></div> : null}
       {props.empty ? (
         <div className="empty">
-          <div className="empty-mark">Lumen</div>
+          <BrandLockup className="empty-logo" />
           <h1>Open a video</h1>
           <p>
             Left and Right move one second. Shift plus an arrow jumps 5%. Drag the timeline to
@@ -414,8 +476,8 @@ export const VideoStage = forwardRef<VideoStageHandle, Props>(function VideoStag
           {props.banner ? <p className="banner-text">{props.banner}</p> : null}
         </div>
       ) : null}
-      {!props.empty && props.banner ? <div className="stage-banner">{props.banner}</div> : null}
-      {!props.empty && !props.playablePath && !props.banner ? (
+      {!props.empty && props.banner ? <div className="stage-banner" role="status">{props.banner}</div> : null}
+      {!props.empty && !props.playablePath && !props.banner && !props.preparing ? (
         <div className="stage-banner">{unplayable}</div>
       ) : null}
     </div>

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { FolderItem } from "@shared/contracts";
 import { mediaUrl } from "./usePlayback";
 
-const POSTER_FAIL = "fail";
+export const POSTER_FAIL = "fail";
 const WORKERS = 2;
 
 function wait(ms: number): Promise<void> {

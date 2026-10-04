@@ -118,6 +118,13 @@ export function TrimTrack({
         className="trim-handle is-start"
         style={{ left: `${startRatio * 100}%` }}
         aria-label="Trim start"
+        title="Trim start · Arrow keys to adjust"
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+          event.preventDefault(); event.stopPropagation();
+          const next = dragStart(start + (event.key === "ArrowRight" ? 1 : -1) * (event.shiftKey ? 1 : .1), end, duration);
+          onRange(next.a, next.b); onSeek(next.a);
+        }}
         onPointerDown={(event) => drag("start", event)}
       />
       <button
@@ -125,6 +132,13 @@ export function TrimTrack({
         className="trim-handle is-end"
         style={{ left: `${endRatio * 100}%` }}
         aria-label="Trim end"
+        title="Trim end · Arrow keys to adjust"
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+          event.preventDefault(); event.stopPropagation();
+          const next = dragEnd(start, end + (event.key === "ArrowRight" ? 1 : -1) * (event.shiftKey ? 1 : .1), duration);
+          onRange(next.a, next.b); onSeek(next.b);
+        }}
         onPointerDown={(event) => drag("end", event)}
       />
       <div className="trim-playhead" style={{ left: `${playRatio * 100}%` }} />

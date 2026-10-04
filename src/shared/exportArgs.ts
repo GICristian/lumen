@@ -13,11 +13,18 @@ export type ExportArgsInput = {
 
 export function buildExportArgs(request: ExportArgsInput): string[] {
   const encode = request.precise || request.crop !== null;
+  const span =
+    request.start !== null && request.end !== null && request.end > request.start;
   const args = ["-y"];
-  if (request.start !== null && request.end !== null) {
+  if (!encode && span) {
     args.push("-ss", String(request.start), "-to", String(request.end));
   }
-  args.push("-i", request.input, "-map", "0:v");
+  args.push("-i", request.input);
+  if (encode && span) {
+    const duration = (request.end ?? 0) - (request.start ?? 0);
+    args.push("-ss", String(request.start), "-t", duration.toFixed(3));
+  }
+  args.push("-map", "0:v");
   if (request.hasAudio) args.push("-map", "0:a?");
   if (request.crop) {
     const { w, h, x, y } = request.crop;

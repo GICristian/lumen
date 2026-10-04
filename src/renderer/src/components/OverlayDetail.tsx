@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ExportRequest, FolderItem, PrepareResult } from "@shared/contracts";
+import { containedVideoBox, defaultCrop, type ScreenBox, type VideoRect } from "@shared/crop";
 import {
   SIZE_PRESETS,
   clipTitle,
@@ -10,7 +11,12 @@ import {
 import { requiresStreamCopy } from "@shared/probe";
 import { normalizeRange, segmentShouldRestart } from "@shared/range";
 import { formatClock, mediaUrl } from "../player/usePlayback";
+import { Icon } from "./Icon";
 import { TrimTrack } from "./TrimTrack";
+import { CropOverlay } from "./CropOverlay";
+import { VolumeControl } from "./VolumeControl";
+import { PlaybackGlyph } from "./PlaybackGlyph";
+import { pausePlayback, resumePlayback } from "../player/resumePlayback";
 
 type Props = {
   item: FolderItem;
@@ -29,7 +35,7 @@ const unplayable = "This clip can't be played. Download still uses the original 
 function typingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "BUTTON" || target.isContentEditable;
 }
 
 export function OverlayDetail({
@@ -44,6 +50,7 @@ export function OverlayDetail({
   status,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const triedProxy = useRef(false);
   const usingProxy = useRef(false);
   const generation = useRef(0);
@@ -62,9 +69,22 @@ export function OverlayDetail({
   const [range, setRange] = useState({ start: 0, end: 0 });
   const [customKbps, setCustomKbps] = useState(8000);
   const [original, setOriginal] = useState(true);
+  const [playing, setPlaying] = useState(false);
+  const [buffering, setBuffering] = useState(false);
+  const [cropMode, setCropMode] = useState(false);
+  const [cropRect, setCropRect] = useState<VideoRect | null>(null);
+  const [aspect, setAspect] = useState<number | null>(null);
+  const [stageBox, setStageBox] = useState<ScreenBox | null>(null);
+  const [videoFrame, setVideoFrame] = useState<{ width: number; height: number } | null>(null);
 
   timeRef.current = time;
   trimRef.current = trimOn;
+
+  useEffect(() => {
+    const hidden = (): void => { if (document.hidden && videoRef.current) pausePlayback(videoRef.current); };
+    document.addEventListener('visibilitychange', hidden);
+    return () => { document.removeEventListener('visibilitychange', hidden); if (videoRef.current) pausePlayback(videoRef.current); };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -79,8 +99,14 @@ export function OverlayDetail({
     setTrimOn(false);
     setRange({ start: 0, end: 0 });
     setOriginal(true);
+    setPlaying(false);
+    setBuffering(false);
     setTime(0);
     setMediaDuration(0);
+    setCropMode(false);
+    setCropRect(null);
+    setAspect(null);
+    setVideoFrame(null);
     void window.lumen
       .prepare(item.path)
       .then((result) => {
@@ -100,6 +126,19 @@ export function OverlayDetail({
   }, [item.path]);
 
   useEffect(() => {
+    const element = stageRef.current;
+    if (!element) return;
+    const update = (): void => {
+      const rect = element.getBoundingClientRect();
+      setStageBox({ left: 0, top: 0, width: rect.width, height: rect.height });
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [src]);
+
+  useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (typingTarget(event.target)) return;
       if (event.altKey || event.ctrlKey || event.metaKey) return;
@@ -107,8 +146,8 @@ export function OverlayDetail({
         event.preventDefault();
         const video = videoRef.current;
         if (!video) return;
-        if (video.paused) void video.play();
-        else video.pause();
+        if (video.paused) resumePlayback(video, () => setNotice('Playback could not resume. Reopen this clip.'));
+        else pausePlayback(video);
         return;
       }
       if (!trimRef.current) return;
@@ -145,12 +184,19 @@ export function OverlayDetail({
     hasAudio,
   });
   const sliderValue = Math.min(40000, Math.max(1000, bitrate ?? customKbps));
+  const cropFrame = probe?.width && probe?.height
+    ? { width: probe.width, height: probe.height }
+    : videoFrame;
+  const cropBox = stageBox && cropFrame
+    ? containedVideoBox(stageBox, cropFrame.width, cropFrame.height)
+    : null;
 
   function togglePlay(): void {
     const video = videoRef.current;
     if (!video) return;
-    if (video.paused) void video.play();
-    else video.pause();
+    setNotice(null);
+    if (video.paused) resumePlayback(video, () => { setBuffering(false); setNotice('Playback could not resume. Reopen this clip.'); });
+    else { pausePlayback(video); setBuffering(false); }
   }
 
   function toggleTrim(): void {
@@ -174,9 +220,9 @@ export function OverlayDetail({
       start: trimOn && known ? trimStart : null,
       end: trimOn && known ? trimEnd : null,
       duration: known ? duration : 0,
-      precise: !copyOnly && bitrate !== null,
-      crop: null,
+      crop: cropMode ? cropRect : null,
       hasAudio,
+      precise: cropMode || (!copyOnly && bitrate !== null),
       videoBitrateKbps: copyOnly ? null : bitrate,
     });
   }
@@ -231,30 +277,16 @@ export function OverlayDetail({
   return (
     <div className="overlay-detail">
       <div className="overlay-detail-bar">
-        <button type="button" className="back-btn" onClick={onBack}>
-          Back
+        <button type="button" className="icon-btn" aria-label="Back" onClick={onBack}>
+          <Icon name="back" />
         </button>
         <div className="overlay-title" title={item.name}>
           {clipTitle(item.name)}
         </div>
-        <label className="size-slider">
-          <span>Vol {Math.round(volume * 100)}</span>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.01}
-            value={volume}
-            aria-label="Volume"
-            onChange={(event) => {
-              const next = Number(event.target.value);
-              onVolume(next);
-              if (videoRef.current) videoRef.current.volume = next;
-            }}
-          />
-        </label>
+        <VolumeControl value={volume} onChange={(next) => { onVolume(next); if (videoRef.current) videoRef.current.volume = next; }} />
+        <button type="button" className="icon-btn" aria-label="Show in folder" data-tooltip="Show in folder" onClick={() => void window.lumen.showItem(item.path).catch(() => setNotice('Could not show this file in its folder.'))}><Icon name="folder" /></button>
       </div>
-      <div className="overlay-stage">
+      <div className={cropMode ? "overlay-stage is-cropping" : "overlay-stage"} ref={stageRef}>
         {src ? (
           <video
             ref={videoRef}
@@ -262,64 +294,98 @@ export function OverlayDetail({
             autoPlay
             playsInline
             onClick={togglePlay}
+            onPlay={() => setPlaying(true)}
+            onPause={() => setPlaying(false)}
+            onWaiting={() => setBuffering(true)}
+            onPlaying={() => setBuffering(false)}
+            onCanPlay={() => setBuffering(false)}
             onTimeUpdate={(event) => onTime(event.currentTarget)}
             onLoadedMetadata={(event) => {
               const media = event.currentTarget;
               media.volume = volume;
               if (Number.isFinite(media.duration)) setMediaDuration(media.duration);
+              if (media.videoWidth > 0 && media.videoHeight > 0) {
+                setVideoFrame({ width: media.videoWidth, height: media.videoHeight });
+                setCropRect(defaultCrop(media.videoWidth, media.videoHeight));
+              }
             }}
             onError={onVideoError}
           />
         ) : null}
-        {rendering ? <p className="overlay-stage-note">Rendering preview</p> : null}
+        {src && !playing && !buffering ? (
+          <div className="center-play" aria-hidden="true">
+            <Icon name="play" />
+          </div>
+        ) : null}
+        {(buffering || rendering || (!src && !notice)) ? <div className="playback-loading" role="status"><span className="loading-ring" /><span>{rendering ? "Rendering preview" : buffering ? "Buffering" : "Opening video"}</span></div> : null}
         {notice && !rendering ? <p className="overlay-stage-note">{notice}</p> : null}
+        {cropMode && cropRect && cropFrame && cropBox ? (
+          <CropOverlay rect={cropRect} frame={cropFrame} videoBox={cropBox} aspect={aspect} onChange={setCropRect} onAspect={setAspect} />
+        ) : null}
       </div>
-      <div className="detail-seek">
-        <TrimTrack
-          duration={duration}
-          time={time}
-          trim={trimOn}
-          start={trimStart}
-          end={trimEnd}
-          onSeek={(next) => {
-            if (videoRef.current) videoRef.current.currentTime = next;
-            setTime(next);
-          }}
-          onRange={(start, end) => setRange({ start, end })}
-          onScrub={(active) => {
-            scrubbing.current = active;
-            const video = videoRef.current;
-            if (!video) return;
-            if (active) {
-              resumeAfterScrub.current = !video.paused;
-              video.pause();
-              return;
-            }
-            if (resumeAfterScrub.current) void video.play();
-          }}
-        />
-        <span>
-          {formatClock(time)} / {formatClock(duration)}
-        </span>
-      </div>
-      <div className="detail-row">
-        <button
-          type="button"
-          className={trimOn ? "text-btn is-on" : "text-btn"}
-          disabled={duration <= 0}
-          onClick={toggleTrim}
-        >
-          Trim
-        </button>
-        <span className="trim-label">
-          {trimOn ? `${formatClock(trimStart)} – ${formatClock(trimEnd)}` : "Full clip"}
-        </span>
-      </div>
-      <div className="detail-row">
+        <div className="detail-dock">
+          <div className="detail-seek">
+            <TrimTrack
+              duration={duration}
+              time={time}
+              trim={trimOn}
+              start={trimStart}
+              end={trimEnd}
+              onSeek={(next) => {
+                if (videoRef.current) videoRef.current.currentTime = next;
+                setTime(next);
+              }}
+              onRange={(start, end) => setRange({ start, end })}
+              onScrub={(active) => {
+                scrubbing.current = active;
+                const video = videoRef.current;
+                if (!video) return;
+                if (active) {
+                  resumeAfterScrub.current = !video.paused;
+                  pausePlayback(video);
+                  return;
+                }
+                if (resumeAfterScrub.current) resumePlayback(video, () => setNotice('Playback could not resume. Reopen this clip.'));
+              }}
+            />
+            <span>
+              {formatClock(time)} / {formatClock(duration)}
+            </span>
+          </div>
+          <div className="detail-row">
+            <button type="button" className="detail-play" aria-label={playing ? "Pause" : "Play"} data-tooltip={playing ? "Pause · Space" : "Play · Space"} disabled={!src} onClick={togglePlay}><PlaybackGlyph playing={playing} /></button>
+            <button
+              type="button"
+              className={cropMode ? "choice is-on" : "choice"}
+              aria-pressed={cropMode}
+              disabled={!cropFrame}
+              onClick={() => {
+                const next = !cropMode;
+                setCropMode(next);
+                setAspect(null);
+                if (next && cropFrame) setCropRect(defaultCrop(cropFrame.width, cropFrame.height));
+              }}
+            >Crop</button>
+            <button
+              type="button"
+              className={trimOn ? "choice is-on" : "choice"}
+              aria-pressed={trimOn}
+              disabled={duration <= 0}
+              onClick={toggleTrim}
+            >
+              Trim
+            </button>
+            <span className="trim-label">
+              {trimOn ? `${formatClock(trimStart)} – ${formatClock(trimEnd)}` : "Full clip"}
+            </span>
+          </div>
+        </div>
+      <div className="detail-export">
         <div className="size-presets">
           <button
             type="button"
-            className={original ? "text-btn is-on" : "text-btn"}
+            className={original ? "choice is-on" : "choice"}
+            aria-pressed={original}
             onClick={() => setOriginal(true)}
           >
             Original
@@ -328,7 +394,8 @@ export function OverlayDetail({
             <button
               key={preset.id}
               type="button"
-              className={!original && customKbps === preset.kbps ? "text-btn is-on" : "text-btn"}
+              className={!original && customKbps === preset.kbps ? "choice is-on" : "choice"}
+              aria-pressed={!original && customKbps === preset.kbps}
               onClick={() => {
                 setOriginal(false);
                 setCustomKbps(preset.kbps);
@@ -355,13 +422,11 @@ export function OverlayDetail({
           />
         </label>
         <div className="size-estimate">
-          <span>Estimated</span>
+          <span>About</span>
           <strong>{formatBytes(estimated)}</strong>
         </div>
         {busy ? (
-          <button type="button" className="export-btn" onClick={onCancel}>
-            {progress === null ? "Cancel" : `${Math.round(progress * 100)}%`}
-          </button>
+          <div className="export-progress" role="status"><progress aria-label="Export progress" max={1} value={progress ?? undefined} /><span>{progress === null ? "Exporting…" : `${Math.round(progress * 100)}%`}</span><button type="button" className="text-btn" onClick={onCancel}>Cancel</button></div>
         ) : (
           <button
             type="button"
@@ -369,12 +434,11 @@ export function OverlayDetail({
             disabled={!prepared?.ffmpegOk}
             onClick={download}
           >
-            Download
+            Export clip
           </button>
         )}
       </div>
       {status ? <p className="overlay-notice">{status}</p> : null}
-      {notice ? <p className="overlay-notice">{notice}</p> : null}
       {prepared && !prepared.ffmpegOk ? (
         <p className="overlay-notice">ffmpeg is not available</p>
       ) : null}

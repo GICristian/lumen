@@ -67,4 +67,23 @@ describe("buildExportArgs", () => {
     expect(args).toContain("8000k");
     expect(args).not.toContain("-crf");
   });
+
+  it("cuts an exact span after the input so the duration matches the marks", () => {
+    const args = buildExportArgs({
+      input: "C:/in.mp4",
+      output: "C:/out.mp4",
+      start: 1.25,
+      end: 4.5,
+      precise: true,
+      crop: null,
+      hasAudio: true,
+    });
+    const inputAt = args.indexOf("-i");
+    const seekAt = args.indexOf("-ss");
+    expect(seekAt).toBeGreaterThan(inputAt);
+    expect(args[seekAt + 1]).toBe("1.25");
+    expect(args).toContain("-t");
+    expect(args).toContain("3.250");
+    expect(args).not.toContain("-c");
+  });
 });
