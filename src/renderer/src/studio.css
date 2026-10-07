@@ -110,20 +110,30 @@ button:disabled:hover { transform: none; box-shadow: none; }
 .update-banner {
   position: absolute;
   z-index: 40;
+  top: 64px;
   left: 50%;
-  bottom: 22px;
   transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: 16px;
-  max-width: min(560px, calc(100% - 32px));
-  padding: 10px 12px 10px 16px;
-  border: 1px solid #e6c18a55;
-  border-radius: 14px;
-  background: #161513f2;
-  box-shadow: 0 12px 32px #00000088;
+  max-width: min(640px, calc(100% - 32px));
+  padding: 14px 14px 14px 18px;
+  border: 1px solid #e6c18a;
+  border-radius: 16px;
+  background: #161513;
+  box-shadow: 0 16px 40px #000000aa;
   -webkit-app-region: no-drag;
 }
+.update-close {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #d9d4c8;
+  font-size: 18px;
+}
+.update-close:hover { background: #ffffff10; color: #fff; }
 .update-banner strong { font-weight: 560; font-size: 13px; }
 .update-banner .export-btn { min-height: 34px; padding-inline: 14px; transition: transform 180ms ease; }
 .update-banner .export-btn:hover:not(:disabled) { transform: scale(1.02); }
@@ -475,6 +485,9 @@ button:disabled:hover { transform: none; box-shadow: none; }
 .replay-duration-presets { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; }
 .replay-duration-presets button { padding:8px 4px; background:#2b2a28; border:1px solid #a9a8a625; color:#c6c5c3; border-radius:5px; font-size:11px; }
 .replay-duration-presets button[aria-pressed=true] { background:#c8b2871e; border-color:#dac29369; color:#f0d6a5; }
+.replay-screen { display:flex; flex-direction:column; gap:8px; margin-top:18px; }
+.replay-screen > span { font-size:10px; color:#b1b0ae; }
+.replay-console select:hover { border-color:#dac29369; }
 .replay-picture-grid { display:grid; grid-template-columns:1.2fr 1fr .8fr; gap:12px; padding:20px 0; border-block:1px solid var(--line); }
 .replay-picture-grid > label { display:flex; flex-direction:column; gap:8px; min-width:0; }
 .replay-picture-grid > label > span { font-size:10px; color:#b1b0ae; }

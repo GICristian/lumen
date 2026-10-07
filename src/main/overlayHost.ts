@@ -211,10 +211,11 @@ export function openOverlay(): void {
 
 function showOverlay(file?: string): void {
   if (!file) pendingFile = null;
-  if (!overlay || overlay.isDestroyed()) overlay = createOverlay();
+  const created = !overlay || overlay.isDestroyed();
+  if (created) overlay = createOverlay();
   const win = overlay;
   if (!win) return;
-  placeOverlay(win);
+  if (created) placeOverlay(win);
   if (!win.isVisible()) guard(() => noteForeground([hwndOf(win.getNativeWindowHandle())]));
   win.setAlwaysOnTop(true, "screen-saver");
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });

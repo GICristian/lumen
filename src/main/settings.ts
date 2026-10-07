@@ -4,7 +4,7 @@ import type { Settings } from "@shared/contracts";
 import { defaultCueStyle, normalizeCueStyle } from "@shared/cues";
 import { rememberFolder } from "@shared/folders";
 import { overlayAccelerator, replayAccelerator, vaultAccelerator } from "@shared/shortcut";
-import { replayBuffer, replayFps, replayHeight, replayGain, replayBitrate, replayDevice } from "@shared/replay";
+import { replayBuffer, replayFps, replayHeight, replayGain, replayBitrate, replayDevice, replayDisplay } from "@shared/replay";
 import { clampVolume } from "@shared/volume";
 
 export const defaultSettings: Settings = {
@@ -40,6 +40,7 @@ export const defaultSettings: Settings = {
   replayBitrateKbps: 8000,
   replayAccelerator: "Ctrl+Alt+Shift+R",
   replayDirectory: null,
+  replayDisplayId: "",
 };
 
 function overlayBoundsOk(value: unknown): value is NonNullable<Settings["overlayBounds"]> {
@@ -107,6 +108,7 @@ export function normalizeSettings(raw: Partial<Settings> | null): Settings {
     replayDirectory: typeof raw?.replayDirectory === "string" && raw.replayDirectory.trim()
       ? raw.replayDirectory
       : null,
+    replayDisplayId: replayDisplay(raw?.replayDisplayId),
   };
 }
 

@@ -104,7 +104,7 @@ export class ReplayStore {
       await this.writeHeader(sessionId, "video.init", piece?.header, "video");
       await this.writeHeader(sessionId, "mic.init", piece?.micHeader, "mic");
       if (!this.leadSet && typeof piece?.micLeadMs === "number" && Number.isFinite(piece.micLeadMs)) {
-        this.leadMs = Math.max(-500, Math.min(500, piece.micLeadMs));
+        this.leadMs = Math.max(-80, Math.min(80, piece.micLeadMs));
         this.leadSet = true;
       }
       await fs.writeFile(part, cluster ? bytes : normalizeWebmTracks(bytes));

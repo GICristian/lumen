@@ -1,4 +1,5 @@
 import type { VideoRect } from "./crop";
+import type { SequenceClip } from "./sequence";
 import type { CueStyle } from "./cues";
 import type { Probe } from "./probe";
 
@@ -35,6 +36,17 @@ export type Settings = {
   replayBitrateKbps: number;
   replayAccelerator: string;
   replayDirectory: string | null;
+  /** Desktop-capturer id such as `screen:0:0`. Empty follows the cursor. */
+  replayDisplayId: string;
+};
+
+export type ReplayScreen = {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+  x: number;
+  primary: boolean;
 };
 
 export type ReplayStatus = {
@@ -63,6 +75,8 @@ export type ReplayStatus = {
   encoder: string;
   notice: string | null;
   lastFile: string | null;
+  displayId: string;
+  displays: ReplayScreen[];
 };
 
 export type ReplayCaptureOptions = {
@@ -129,8 +143,12 @@ export type ExportRequest = {
   crop: VideoRect | null;
   hasAudio: boolean;
   videoBitrateKbps?: number | null;
+  /** Editor playback level. Omitted or 1 leaves the file's audio unchanged. */
+  volume?: number | null;
   outputPath?: string;
 };
+
+export type { SequenceClip };
 
 export type PrepareResult = {
   playablePath: string | null;
@@ -164,10 +182,27 @@ export type UpdateState = {
   phase: UpdatePhase;
   version: string | null;
   percent: number;
+  dismissed: boolean;
   message: string | null;
 };
 
 export type ExportProgress = { jobId: string; ratio: number };
+export type ActivityKind = "recorded" | "exported";
+
+export type ActivityItem = {
+  id: string;
+  kind: ActivityKind;
+  path: string;
+  at: number;
+};
+
+export type LumenFolder = {
+  name: string;
+  directory: string;
+  savedAt: number;
+  iconPath: string | null;
+};
+
 export type ExportDone = { jobId: string; outputPath: string };
 export type ExportError = { jobId: string; message: string };
 
@@ -220,6 +255,8 @@ export type LumenApi = {
   openDefaultApps: () => Promise<void>;
   pathForFile: (file: File) => string;
   startExport: (request: ExportRequest) => Promise<{ jobId: string }>;
+  startSequence: (clips: SequenceClip[]) => Promise<{ jobId: string }>;
+  openStudio: (filePath: string) => Promise<void>;
   cancelExport: (jobId: string) => Promise<void>;
   setTitle: (title: string) => void;
   onExportProgress: (cb: (payload: ExportProgress) => void) => () => void;
@@ -249,7 +286,18 @@ export type LumenApi = {
   replaySegment: (segment: ReplaySegment) => Promise<void>;
   replayCaptureReady: (info: ReplayCaptureInfo) => void;
   replayCaptureFailed: (message: string) => void;
+  replayRebindAudio: () => Promise<ReplayStatus>;
+  favorites: () => Promise<string[]>;
+  toggleFavorite: (filePath: string) => Promise<string[]>;
+  forgetFavorites: (paths: string[]) => Promise<string[]>;
+  onFavorites: (cb: (paths: string[]) => void) => () => void;
+  activity: () => Promise<ActivityItem[]>;
+  onActivity: (cb: (items: ActivityItem[]) => void) => () => void;
+  lumenFolders: () => Promise<LumenFolder[]>;
+  onLumenFolders: (cb: () => void) => () => void;
   updateState: () => Promise<UpdateState>;
   installUpdate: () => Promise<void>;
+  dismissUpdate: () => Promise<UpdateState>;
   onUpdateState: (cb: (state: UpdateState) => void) => () => void;
+  onStudioOpen: (cb: (filePath: string) => void) => () => void;
 };

@@ -5,6 +5,7 @@ import {
   formatBytes,
   formatMbps,
   formatWhen,
+  isEditedClip,
   sortClips,
   sourceVideoKbps,
 } from "./clips";
@@ -86,6 +87,16 @@ describe("sourceVideoKbps", () => {
   it("subtracts audio from the file bitrate", () => {
     const bytes = (10_000 * 1000 * 10) / 8;
     expect(sourceVideoKbps(bytes, 10, true)).toBe(10000 - 192);
+  });
+});
+
+describe("isEditedClip", () => {
+  it("matches Lumen's edit marker and ignores words that only contain those letters", () => {
+    expect(isEditedClip("clip_edit.mp4")).toBe(true);
+    expect(isEditedClip("clip_edit_2.mp4")).toBe(true);
+    expect(isEditedClip("my edit.mp4")).toBe(true);
+    expect(isEditedClip("credit.mp4")).toBe(false);
+    expect(isEditedClip("Replay 2026-10-05.mp4")).toBe(false);
   });
 });
 

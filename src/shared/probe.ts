@@ -4,6 +4,7 @@ export type Probe = {
   width: number | null;
   height: number | null;
   duration: number | null;
+  fps: number | null;
 };
 
 export function parseProbe(stderr: string): Probe {
@@ -18,6 +19,7 @@ export function parseProbe(stderr: string): Probe {
   let audioCodec: string | null = null;
   let width: number | null = null;
   let height: number | null = null;
+  let fps: number | null = null;
 
   for (const line of stderr.split(/\r?\n/)) {
     const stream = line.match(
@@ -33,11 +35,13 @@ export function parseProbe(stderr: string): Probe {
         width = Number(size[1]);
         height = Number(size[2]);
       }
+      const rate = line.match(/(\d+(?:\.\d+)?)\s+fps/);
+      if (rate) fps = Number(rate[1]);
     }
     if (kind === "Audio" && audioCodec === null) audioCodec = codec;
   }
 
-  return { videoCodec, audioCodec, width, height, duration };
+  return { videoCodec, audioCodec, width, height, duration, fps };
 }
 
 export type PlaybackKind = "direct" | "remux" | "unplayable";

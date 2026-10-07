@@ -5,6 +5,7 @@ import path from "node:path";
 import ffmpegStatic from "ffmpeg-static";
 import type { ExportRequest, PrepareResult } from "@shared/contracts";
 import { buildExportArgs } from "@shared/exportArgs";
+import { buildSequenceArgs, sequenceDuration, type SequenceClip } from "@shared/sequence";
 import { nextOutputPath } from "@shared/exportPaths";
 import {
   lastStderrLine,
@@ -27,6 +28,7 @@ const emptyProbe: Probe = {
   width: null,
   height: null,
   duration: null,
+  fps: null,
 };
 
 export function ffmpegBinary(): string {
@@ -390,13 +392,43 @@ export async function startExport(
     crop: request.crop,
     hasAudio: request.hasAudio,
     videoBitrateKbps: request.videoBitrateKbps,
+    volume: request.volume,
   });
 
+  return runExport(args, output, span, request.sourcePath, events);
+}
+
+export async function startSequence(
+  clips: SequenceClip[],
+  output: string,
+  events: ExportEvents,
+): Promise<{ jobId: string }> {
+  if (currentJob) throw new Error("Export already running");
+  if (clips.length === 0) throw new Error("Add a clip to the timeline");
+  for (const clip of clips) {
+    try {
+      await fs.stat(clip.path);
+    } catch {
+      throw new Error("File not found");
+    }
+  }
+  await fs.mkdir(path.dirname(output), { recursive: true });
+  const args = buildSequenceArgs(clips, output);
+  return runExport(args, output, sequenceDuration(clips), clips[0]?.path ?? output, events);
+}
+
+function runExport(
+  args: string[],
+  output: string,
+  span: number,
+  label: string,
+  events: ExportEvents,
+): { jobId: string } {
   let child: ChildProcess;
   try {
     child = spawn(ffmpegBinary(), args, { windowsHide: true });
   } catch (error) {
-    console.error("ffmpeg spawn failed", request.sourcePath, error);
+    console.error("ffmpeg spawn failed", label, error);
     throw new Error("ffmpeg is not available");
   }
 
@@ -430,7 +462,7 @@ export async function startExport(
     stderr += chunk.toString();
   });
   child.on("error", (error) => {
-    console.error("ffmpeg process error", request.sourcePath, error);
+    console.error("ffmpeg process error", label, error);
     finish();
     void fs.rm(output, { force: true });
     events.error({ jobId: job.id, message: "ffmpeg is not available" });
@@ -446,7 +478,7 @@ export async function startExport(
       events.done({ jobId: job.id, outputPath: output });
       return;
     }
-    console.error("ffmpeg export failed", request.sourcePath, code, lastStderrLine(stderr));
+    console.error("ffmpeg export failed", label, code, lastStderrLine(stderr));
     void fs.rm(output, { force: true });
     events.error({ jobId: job.id, message: lastStderrLine(stderr) });
   });

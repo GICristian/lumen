@@ -9,12 +9,16 @@ import { initVault, vaultLock } from "./vault";
 import { videoArg } from "./library";
 import { hideToTray, registerIpc, revealWindow } from "./ipc";
 import { getSettings, initSettings, patchSettings } from "./settings";
-import { initUpdates } from "./updates";
+import { initFavorites } from "./favorites";
+import { initActivity } from "./activity";
+import { initLumenFolders } from "./lumenFolders";
+import { initUpdateNotice, initUpdates } from "./updates";
 
 app.commandLine.appendSwitch("enable-features", "PlatformHEVCDecoderSupport");
-// The capture window stays hidden, so its renderer must keep the full frame rate.
-app.commandLine.appendSwitch("disable-renderer-backgrounding");
-app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
+app.commandLine.appendSwitch(
+  "disable-features",
+  "CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,ThrottleForegroundTimers",
+);
 
 const RELAUNCH_TASK = "LumenUser";
 
@@ -187,6 +191,9 @@ if (handingOff) {
     });
 
     await initSettings(app.getPath("userData"));
+    await initFavorites(app.getPath("userData"));
+    await initActivity(app.getPath("userData"));
+    await initLumenFolders(app.getPath("userData"));
     const userData = app.getPath("userData");
     await initVault(path.join(userData, "store"));
     registerIpc(
@@ -205,7 +212,13 @@ if (handingOff) {
         mainWindow?.webContents.send("vault:open");
       },
     });
+    ipcMain.handle("studio:open", (_event, filePath: unknown) => {
+      showMain();
+      const clip = typeof filePath === "string" ? filePath : "";
+      mainWindow?.webContents.send("studio:open", clip);
+    });
     initReplay(path.join(userData, "replay-buffer"));
+    await initUpdateNotice(userData);
     initUpdates(() => {
       quitting = true;
       stopReplay();

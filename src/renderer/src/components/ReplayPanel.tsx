@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import type { ReplayStatus, Settings } from "@shared/contracts";
+import type { ReplayScreen, ReplayStatus, Settings } from "@shared/contracts";
 import { acceleratorFromEvent } from "@shared/shortcut";
 import { replayBudget, replayBuffer, replayBitrate } from "@shared/replay";
 import { Icon } from "./Icon";
@@ -7,12 +7,21 @@ import { BrandMark } from "./BrandMark";
 import { formatBytes } from "@shared/clips";
 import { audioLimiter, humFilter, microphoneConstraints } from "../player/replayAudio";
 
-type Config = Pick<Settings, "replayAutoStart" | "replaySeconds" | "replayFps" | "replayHeight" | "replayMic" | "replayMicDeviceId" | "replayMicGain" | "replaySystemAudio" | "replaySystemGain" | "replayNoiseSuppression" | "replayEchoCancellation" | "replayMicHum" | "replayBitrateKbps">;
+type Config = Pick<Settings, "replayAutoStart" | "replaySeconds" | "replayFps" | "replayHeight" | "replayMic" | "replayMicDeviceId" | "replayMicGain" | "replaySystemAudio" | "replaySystemGain" | "replayNoiseSuppression" | "replayEchoCancellation" | "replayMicHum" | "replayBitrateKbps" | "replayDisplayId">;
 function configOf(status: ReplayStatus): Config {
   return { replayAutoStart: status.autoStart, replaySeconds: status.seconds, replayFps: status.fps, replayHeight: status.height, replayMic: status.mic,
     replayMicDeviceId: status.micDeviceId, replayMicGain: status.micGain, replaySystemAudio: status.systemAudio,
     replaySystemGain: status.systemGain, replayNoiseSuppression: status.noiseSuppression,
-    replayEchoCancellation: status.echoCancellation, replayMicHum: status.micHum, replayBitrateKbps: status.bitrateKbps };
+    replayEchoCancellation: status.echoCancellation, replayMicHum: status.micHum, replayBitrateKbps: status.bitrateKbps,
+    replayDisplayId: status.displayId };
+}
+function screenOption(screen: ReplayScreen, screens: ReplayScreen[]): string {
+  const xs = screens.map((item) => item.x);
+  const spread = screens.length > 1 && Math.min(...xs) !== Math.max(...xs);
+  const place = screen.x === Math.min(...xs) ? "left" : screen.x === Math.max(...xs) ? "right" : "";
+  const side = spread && place ? ` · ${place}` : "";
+  const size = screen.width > 0 ? ` · ${screen.width}×${screen.height}` : "";
+  return `${screen.name}${size}${screen.primary ? " · primary" : ""}${side}`;
 }
 function durationLabel(seconds: number): string {
   return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
@@ -210,6 +219,7 @@ export function ReplayPanel({ compact = false }: { compact?: boolean }) {
               <div className="replay-section-caption"><span>01 / PICTURE & BUFFER</span><span>Local capture</span></div>
               <div className="replay-duration-card"><label htmlFor="replay-duration">Keep the last<small>Choose any duration from 10 seconds to 15 minutes.</small></label><div className="replay-duration-input"><input id="replay-duration" type="number" min={10} max={900} step={1} value={draft.replaySeconds} onChange={(event) => edit({ replaySeconds: Number(event.target.value) })} onBlur={() => edit({ replaySeconds: replayBuffer(draft.replaySeconds) })} /><span>sec</span></div></div>
               <div className="replay-duration-presets">{[30,60,120,300].map(seconds => <button type="button" key={seconds} aria-pressed={draft.replaySeconds === seconds} onClick={() => edit({ replaySeconds: seconds })}>{durationLabel(seconds)}</button>)}</div>
+              <label className="replay-screen" htmlFor="replay-screen"><span>Screen</span><select id="replay-screen" value={draft.replayDisplayId} onChange={(event) => edit({ replayDisplayId: event.target.value })}><option value="">Screen under the cursor</option>{(status?.displays ?? []).map((screen) => <option key={screen.id} value={screen.id}>{screenOption(screen, status?.displays ?? [])}</option>)}{draft.replayDisplayId && !(status?.displays ?? []).some((screen) => screen.id === draft.replayDisplayId) ? <option value={draft.replayDisplayId}>Selected screen · unavailable</option> : null}</select></label>
               <div className="replay-picture-grid"><label htmlFor="replay-resolution"><span>Resolution</span><select id="replay-resolution" value={draft.replayHeight} onChange={(event) => edit({ replayHeight: Number(event.target.value) as 720 | 1080 })}><option value={720}>720p HD</option><option value={1080}>1080p Full HD</option></select></label><label htmlFor="replay-framerate"><span>Frame rate</span><select id="replay-framerate" value={draft.replayFps} onChange={(event) => edit({ replayFps: Number(event.target.value) as 30 | 60 })}><option value={30}>30 fps</option><option value={60}>60 fps</option></select></label><label htmlFor="replay-bitrate"><span>Bitrate · Mbps</span><input id="replay-bitrate" type="number" min={2} max={30} step={.5} value={draft.replayBitrateKbps / 1000} onChange={(event) => edit({ replayBitrateKbps: Number(event.target.value) * 1000 })} onBlur={() => edit({ replayBitrateKbps: replayBitrate(draft.replayBitrateKbps) })} /></label></div>
               <div className="replay-section-caption"><span>QUALITY PROFILE</span><span>Video bitrate target</span></div>
               <div className="replay-quality-grid">{[{ label: 'Efficient', note: 'Smaller files', factor: .6 }, { label: 'Balanced', note: 'Everyday capture', factor: 1 }, { label: 'High detail', note: 'Fast action', factor: 1.5 }].map(({ label, note, factor }) => { const kbps = replayBitrate((draft.replayHeight === 720 ? 8000 : 12000) * (draft.replayFps === 60 ? 1.5 : 1) * factor); return <button type="button" key={label} aria-pressed={draft.replayBitrateKbps === kbps} onClick={() => edit({ replayBitrateKbps: kbps })}><span className="replay-quality-check">{draft.replayBitrateKbps === kbps ? '✓' : '○'}</span><strong>{label}</strong><small>{note}</small><span>{kbps / 1000} <small>Mbps</small></span></button>; })}</div>

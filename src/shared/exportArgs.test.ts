@@ -86,4 +86,33 @@ describe("buildExportArgs", () => {
     expect(args).toContain("3.250");
     expect(args).not.toContain("-c");
   });
+
+  it("writes the editor volume into the audio and leaves full volume as a copy", () => {
+    const quieter = buildExportArgs({
+      input: "C:/in.mp4",
+      output: "C:/out.mp4",
+      start: null,
+      end: null,
+      precise: false,
+      crop: null,
+      hasAudio: true,
+      volume: 0.82,
+    });
+    expect(quieter).toContain("volume=0.820");
+    expect(quieter).toContain("-c:v");
+    expect(quieter).toContain("copy");
+    expect(quieter).toContain("aac");
+    const full = buildExportArgs({
+      input: "C:/in.mp4",
+      output: "C:/out.mp4",
+      start: null,
+      end: null,
+      precise: false,
+      crop: null,
+      hasAudio: true,
+      volume: 1,
+    });
+    expect(full).toContain("copy");
+    expect(full).not.toContain("volume=");
+  });
 });

@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { BrowserWindow, dialog, shell } from "electron";
 import type { ExportRequest, Settings } from "@shared/contracts";
+import { nextOutputPath } from "@shared/exportPaths";
+import type { SequenceClip } from "@shared/sequence";
 import { rememberFolder } from "@shared/folders";
 import { srtToVtt } from "@shared/srt";
 import { fetchSubtitle, searchSubtitles, syncSubtitles } from "./subtitles";
@@ -12,9 +14,13 @@ import {
   preparePlayback,
   previewClip,
   startExport,
+  startSequence,
   thumbnail,
 } from "./ffmpeg";
 import { deleteVideos, listDirectory, listFolder, videoArg } from "./library";
+import { forgetFavoritePaths, listFavorites, toggleFavoritePath } from "./favorites";
+import { listActivity, recordActivity } from "./activity";
+import { listLumenFolders, lumenReplayRoot } from "./lumenFolders";
 import {
   applyLaunchOnStartup,
   beginOverlayDrag,
@@ -45,6 +51,41 @@ import {
 import { getSettings, patchSettings } from "./settings";
 
 let trayHide = 0;
+
+function readSequence(raw: unknown): SequenceClip[] {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 40) {
+    throw new Error("Add a clip to the timeline");
+  }
+  return raw.map((item) => {
+    if (!item || typeof item !== "object") throw new Error("Add a clip to the timeline");
+    const row = item as Partial<SequenceClip>;
+    if (typeof row.path !== "string" || !row.path.trim()) throw new Error("File not found");
+    if (isVaultPath(row.path)) throw new Error("Vault clips stay inside the vault");
+    const start = Number(row.start);
+    const end = Number(row.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      throw new Error("Each clip needs a length");
+    }
+    const crop = row.crop;
+    const validCrop = crop
+      && Number.isFinite(crop.x) && Number.isFinite(crop.y)
+      && Number.isFinite(crop.w) && Number.isFinite(crop.h)
+      && crop.w >= 2 && crop.h >= 2
+      ? { x: crop.x, y: crop.y, w: crop.w, h: crop.h }
+      : null;
+    return {
+      path: row.path,
+      start,
+      end,
+      volume: typeof row.volume === "number" ? row.volume : 1,
+      crop: validCrop,
+      hasAudio: row.hasAudio !== false,
+      width: typeof row.width === "number" && row.width > 0 ? row.width : 1280,
+      height: typeof row.height === "number" && row.height > 0 ? row.height : 720,
+      fps: typeof row.fps === "number" && row.fps > 0 ? row.fps : 30,
+    };
+  });
+}
 
 function stopPlayback(win: BrowserWindow): void {
   if (win.isDestroyed() || win.webContents.isDestroyed()) return;
@@ -204,7 +245,17 @@ export function registerIpc(
     const win = caller(event) ?? getWindow();
     const settings = getSettings();
     const source = path.parse(sourcePath);
-    const defaultPath = path.join(settings.exportDirectory ?? source.dir, `${source.name}_${suffix}.mp4`);
+    if (suffix === "edit") {
+      const root = lumenReplayRoot() || source.dir;
+      const dir = path.join(root, "Edits");
+      await fs.mkdir(dir, { recursive: true });
+      const names = await fs.readdir(dir).catch(() => [] as string[]);
+      return nextOutputPath(path.join(dir, `${source.name}.mp4`), "edit", names);
+    }
+    const defaultPath = path.join(
+      settings.exportDirectory ?? source.dir,
+      `${source.name}_${suffix}.mp4`,
+    );
     const options = { title: "Save video", defaultPath, filters: [{ name: "MP4 video", extensions: ["mp4"] }] };
     const result = win
       ? await withOverlayRelaxed(win, () => dialog.showSaveDialog(win, options))
@@ -230,6 +281,15 @@ export function registerIpc(
   );
 
   ipcMain.handle("settings:get", () => getSettings());
+  ipcMain.handle("favorites:list", () => listFavorites());
+  ipcMain.handle("activity:list", () => listActivity());
+  ipcMain.handle("lumen-folders:list", () => listLumenFolders());
+  ipcMain.handle("favorites:toggle", (_event, filePath: unknown) =>
+    toggleFavoritePath(typeof filePath === "string" ? filePath : ""));
+  ipcMain.handle("favorites:forget", (_event, paths: unknown) =>
+    forgetFavoritePaths(Array.isArray(paths)
+      ? paths.filter((item): item is string => typeof item === "string")
+      : []));
 
   ipcMain.handle("settings:set", (_event, patch: Partial<Settings>) => patchSettings(patch));
 
@@ -249,7 +309,27 @@ export function registerIpc(
     }
     return startExport(request, {
       progress: (payload) => send("export:progress", payload),
-      done: (payload) => send("export:done", payload),
+      done: (payload) => {
+        send("export:done", payload);
+        void recordActivity({ kind: "exported", path: payload.outputPath });
+      },
+      error: (payload) => send("export:error", payload),
+    });
+  });
+
+  ipcMain.handle("export:sequence", async (_event, raw: unknown) => {
+    const clips = readSequence(raw);
+    const root = lumenReplayRoot() || path.dirname(clips[0].path);
+    const dir = path.join(root, "Edits");
+    await fs.mkdir(dir, { recursive: true });
+    const names = await fs.readdir(dir).catch(() => [] as string[]);
+    const output = nextOutputPath(path.join(dir, path.basename(clips[0].path)), "edit", names);
+    return startSequence(clips, output, {
+      progress: (payload) => send("export:progress", payload),
+      done: (payload) => {
+        send("export:done", payload);
+        void recordActivity({ kind: "exported", path: payload.outputPath });
+      },
       error: (payload) => send("export:error", payload),
     });
   });

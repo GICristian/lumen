@@ -21,6 +21,7 @@ describe("parseProbe", () => {
       width: 1920,
       height: 1080,
       duration: 10.5,
+      fps: 30,
     });
   });
 });

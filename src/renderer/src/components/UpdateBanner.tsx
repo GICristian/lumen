@@ -31,6 +31,16 @@ export function UpdateBanner() {
       >
         {updateLabel(state)}
       </button>
+      {state.phase === "available" ? (
+        <button
+          type="button"
+          className="update-close"
+          aria-label="Close update notice"
+          onClick={() => { void window.lumen.dismissUpdate().then(setState).catch(() => undefined); }}
+        >
+          ×
+        </button>
+      ) : null}
     </div>
   );
 }

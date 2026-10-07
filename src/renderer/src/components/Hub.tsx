@@ -1,3 +1,4 @@
+import { ActivityBell } from "./ActivityBell";
 import { BrandLockup, BrandMark } from "./BrandMark";
 import { HubSettings } from "./HubSettings";
 import { Icon } from "./Icon";
@@ -16,6 +17,7 @@ type Props = {
   dropping: boolean;
   onOpenFile: () => void;
   onOpenEditor: () => void;
+  onViewActivity?: (filePath: string) => void;
   onOpenLibrary: () => void;
   onOverlay: () => void;
   onOpenSettings: () => void;
@@ -42,6 +44,7 @@ export function Hub({
   dropping,
   onOpenFile,
   onOpenEditor,
+  onViewActivity,
   onOpenLibrary,
   onOverlay,
   onOpenSettings,
@@ -76,10 +79,13 @@ export function Hub({
         )}
         <div className="hub-spacer" />
         {page === "home" ? (
-          <button type="button" className="hub-replay-entry" onClick={onOpenReplay}>
-            <Icon name="record" />
-            Replay
-          </button>
+          <>
+            <ActivityBell onView={onViewActivity} />
+            <button type="button" className="hub-replay-entry" onClick={onOpenReplay}>
+              <Icon name="record" />
+              Replay
+            </button>
+          </>
         ) : null}
         <div className="window-controls">
           <button type="button" className="win-btn" onClick={onMinimize} aria-label="Minimize">
@@ -183,7 +189,7 @@ export function Hub({
               <span className="hub-copy">
                 <span className="hub-kicker">Studio</span>
                 <strong>Open editor</strong>
-                <p>Trim, crop and compress.</p>
+                <p>Timeline, media and export.</p>
               </span>
             </button>
             <button type="button" className="hub-card hub-tile hub-vault" onClick={onOpenVault}>

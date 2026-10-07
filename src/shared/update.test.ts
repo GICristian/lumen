@@ -5,6 +5,12 @@ describe("update banner", () => {
   it("stays hidden until a release is newer", () => {
     expect(updateVisible(idleUpdate)).toBe(false);
     expect(updateVisible({ ...idleUpdate, phase: "available", version: "0.2.2" })).toBe(true);
+    expect(updateVisible({
+      ...idleUpdate,
+      phase: "available",
+      version: "0.2.2",
+      dismissed: true,
+    })).toBe(false);
   });
 
   it("names the release and shows download progress", () => {

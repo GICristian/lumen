@@ -14,6 +14,12 @@ export function clipTitle(name: string): string {
   return name.slice(0, dot);
 }
 
+/** True when the file name carries Lumen's edit marker, such as clip_edit.mp4. */
+export function isEditedClip(name: string): boolean {
+  const stem = clipTitle(name).toLowerCase();
+  return /(?:^|[\s_-])edit(?:$|[\s_\-\d])/.test(stem);
+}
+
 export function filterClips<T extends { name: string }>(items: T[], query: string): T[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return items;

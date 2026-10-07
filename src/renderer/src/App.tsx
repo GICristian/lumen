@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { FolderItem, VaultItem } from "@shared/contracts";
+import type { FolderItem, LumenFolder, VaultItem } from "@shared/contracts";
 import { sortClips, type ClipSort } from "@shared/clips";
 import type { VideoRect } from "@shared/crop";
 import { defaultCrop } from "@shared/crop";
@@ -17,6 +17,7 @@ import { OverlayDetail } from "./components/OverlayDetail";
 import { FolderList } from "./components/FolderList";
 import { Timeline } from "./components/Timeline";
 import { TitleBar } from "./components/TitleBar";
+import { StudioBoard, type StudioSeed } from "./components/StudioBoard";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { Transport } from "./components/Transport";
 import { VideoStage, type VideoStageHandle } from "./components/VideoStage";
@@ -84,11 +85,14 @@ export function App() {
   const [cursorSize, setCursorSize] = useState(24);
   const [exportDirectory, setExportDirectory] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
-  const [hubPage, setHubPage] = useState<"home" | "settings" | "vault" | "replay">("home");
+  const [hubPage, setHubPage] = useState<"home" | "settings" | "vault" | "replay" | "studio">("home");
+  const [studioSeed, setStudioSeed] = useState<StudioSeed | null>(null);
   const [fromVault, setFromVault] = useState(false);
   const [vaultTitle, setVaultTitle] = useState<string | null>(null);
   const [lastFolder, setLastFolder] = useState<string | null>(null);
   const [recentFolders, setRecentFolders] = useState<string[]>([]);
+  const [lumenFolders, setLumenFolders] = useState<LumenFolder[]>([]);
+  const [favorites, setFavorites] = useState<string[]>([]);
   const [home, setHome] = useState(true);
   const homeRef = useRef(true);
   const vaultPlayback = useRef(false);
@@ -321,6 +325,9 @@ export function App() {
     await new Promise((resolve) => window.setTimeout(resolve, 80));
     try {
       const result = await window.lumen.deleteClips(paths);
+      if (result.deleted.length > 0) {
+        void window.lumen.forgetFavorites(result.deleted).then(setFavorites);
+      }
       const gone = new Set(result.deleted);
       selection.clear();
       const rest = items.filter((item) => !gone.has(item.path));
@@ -459,19 +466,20 @@ export function App() {
     const dur = durationOf();
     if (!Number.isFinite(dur) || dur <= 0) return;
     try {
-      const outputPath = await window.lumen.chooseExportPath(currentPath, cropMode ? "edit" : "trim");
+      const exact = cropMode
+        || precise
+        || (hasMarks && !requiresStreamCopy(probe?.videoCodec ?? null));
+      const outputPath = await window.lumen.chooseExportPath(currentPath, exact ? "edit" : "trim");
       if (!outputPath) return;
       const result = await window.lumen.startExport({
         sourcePath: currentPath,
         start: hasMarks ? marks.a : null,
         end: hasMarks ? marks.b : null,
         duration: dur,
-        precise:
-          cropMode ||
-          precise ||
-          (hasMarks && !requiresStreamCopy(probe?.videoCodec ?? null)),
+        precise: exact,
         crop: cropMode ? cropRect : null,
         hasAudio: probe?.audioCodec != null,
+        volume: volumeRef.current,
         outputPath,
       });
       jobRef.current = result.jobId;
@@ -511,6 +519,19 @@ export function App() {
     seekTo,
     clearSegment,
   };
+
+  useEffect(() => {
+    void window.lumen.lumenFolders().then(setLumenFolders).catch(() => setLumenFolders([]));
+    void window.lumen.favorites().then(setFavorites).catch(() => setFavorites([]));
+    const offFolders = window.lumen.onLumenFolders(() => {
+      void window.lumen.lumenFolders().then(setLumenFolders).catch(() => undefined);
+    });
+    const offFavorites = window.lumen.onFavorites(setFavorites);
+    return () => {
+      offFolders();
+      offFavorites();
+    };
+  }, []);
 
   useEffect(() => {
     if (!window.lumen) return;
@@ -631,6 +652,15 @@ export function App() {
       setToast({ text: fileName(payload.outputPath), path: payload.outputPath });
     });
     const offHome = window.lumen.onShowHome(() => homeFn.current());
+    const offStudio = window.lumen.onStudioOpen((filePath) => {
+      videoRef.current && pausePlayback(videoRef.current);
+      setPlaying(false);
+      setEditorOpen(false);
+      setHome(true);
+      setHubPage("studio");
+      if (filePath) setStudioSeed({ path: filePath, token: Date.now() });
+      window.lumen.setTitle("Lumen");
+    });
     const offVault = window.lumen.onVaultOpen(() => {
       vaultReturn.current = homeRef.current ? "home" : "player";
       videoRef.current && pausePlayback(videoRef.current);
@@ -660,6 +690,7 @@ export function App() {
       offError();
       offVault();
       offHome();
+      offStudio();
     };
   }, []);
 
@@ -804,6 +835,9 @@ export function App() {
       onDrop={onDrop}
     >
       <UpdateBanner />
+      {home && hubPage === "studio" ? (
+        <StudioBoard seed={studioSeed} onBack={() => setHubPage("home")} />
+      ) : null}
       {home && hubPage === "vault" ? (
         <VaultPane
           onPlay={(item) => void playVault(item)}
@@ -813,7 +847,7 @@ export function App() {
           onClose={() => window.lumen.close()}
         />
       ) : null}
-      {home && hubPage !== "vault" ? (
+      {home && hubPage !== "vault" && hubPage !== "studio" ? (
         <Hub
           page={hubPage === "settings" || hubPage === "replay" ? hubPage : "home"}
           shortcut={overlayShortcut}
@@ -840,11 +874,10 @@ export function App() {
             });
           }}
           onOpenEditor={() => {
-            void window.lumen.openFile().then((file) => {
-              if (!file) return;
-              void loadFile(file).then(() => setEditorOpen(true));
-            });
+            setEditorOpen(false);
+            setHubPage("studio");
           }}
+          onViewActivity={(file) => { void loadFile(file); }}
           onOpenLibrary={() => {
             if (lastFolder) void showFolder(lastFolder, false);
             else void openFolder(false);
@@ -954,7 +987,14 @@ export function App() {
           onSelectFolder={(folder) => void showFolder(folder, false)}
           onOpen={(file) => void loadFile(file)}
           onEdit={(file) => { void loadFile(file).then(() => setEditorOpen(true)); }}
+          onStudio={(file) => { void window.lumen.openStudio(file); }}
           onSelect={selection.pick}
+          lumenFolders={lumenFolders}
+          folderPath={lastFolder}
+          favorites={favorites}
+          onFavorite={(filePath) => {
+            void window.lumen.toggleFavorite(filePath).then(setFavorites).catch(() => undefined);
+          }}
           deleteSlot={
             <DeleteClips
               count={selection.selected.length}

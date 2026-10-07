@@ -3,6 +3,7 @@ import type { FolderItem } from "@shared/contracts";
 import { clipTitle, formatBytes } from "@shared/clips";
 import { formatClock } from "../player/usePlayback";
 import { mediaUrl } from "../player/usePlayback";
+import { EditMenu } from "./EditMenu";
 import { Icon } from "./Icon";
 import { VolumeControl } from "./VolumeControl";
 import { PlaybackGlyph } from "./PlaybackGlyph";
@@ -13,14 +14,20 @@ export function OverlayPreview({
   item,
   onBack,
   onEdit,
+  onStudio,
   volume,
   onVolume,
+  favorite = false,
+  onFavorite,
 }: {
   item: FolderItem;
   onBack: () => void;
   onEdit: () => void;
+  onStudio: () => void;
   volume: number;
   onVolume: (value: number) => void;
+  favorite?: boolean;
+  onFavorite?: () => void;
 }) {
   const video = useRef<HTMLVideoElement>(null);
   const [source, setSource] = useState<string | null>(null);
@@ -91,10 +98,24 @@ export function OverlayPreview({
   return (
     <section className="overlay-preview">
       <header className="overlay-preview-head">
-        <button type="button" className="icon-btn" aria-label="Back to clips" onClick={onBack}><Icon name="back" /></button>
+        <button type="button" className="overlay-back" aria-label="Back to clips" onClick={onBack}>
+          <Icon name="back" />
+          <span>Back</span>
+        </button>
         <div className="overlay-preview-title"><span className="hub-kicker">QUICK LOOK</span><strong title={item.name}>{clipTitle(item.name)}</strong></div>
+        {onFavorite ? (
+          <button
+            type="button"
+            className={favorite ? "icon-btn is-favorite" : "icon-btn"}
+            aria-label={favorite ? "Remove from favorites" : "Add to favorites"}
+            aria-pressed={favorite}
+            onClick={onFavorite}
+          >
+            <Icon name="star" />
+          </button>
+        ) : null}
         <button type="button" className="icon-btn" aria-label="Show in folder" data-tooltip="Show in folder" onClick={() => void window.lumen.showItem(item.path).catch(() => setNotice('Could not show this file in its folder.'))}><Icon name="folder" /></button>
-        <button type="button" className="editor-entry" onClick={onEdit}><Icon name="edit" /> Open in editor</button>
+        <EditMenu label="Edit" className="editor-entry" onQuick={onEdit} onStudio={onStudio} />
       </header>
       <div className="overlay-preview-screen">
         {source ? <video ref={video} src={source} autoPlay playsInline onWaiting={() => setBuffering(true)} onPlaying={() => setBuffering(false)} onCanPlay={() => setBuffering(false)} onError={() => { setBuffering(false); setNotice("This clip could not be previewed."); }} onClick={togglePlayback} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(event) => setCurrent(event.currentTarget.currentTime)} onLoadedMetadata={(event) => setDuration(event.currentTarget.duration)} /> : null}

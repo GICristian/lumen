@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type RefObject } from 
 import type { FolderItem } from "@shared/contracts";
 import { clipTitle, formatBytes, formatWhen } from "@shared/clips";
 import { POSTER_FAIL, posterImage } from "../player/usePosters";
+import { EditMenu } from "./EditMenu";
 import { Icon } from "./Icon";
 
 type CardProps = {
@@ -12,8 +13,11 @@ type CardProps = {
   onHover: (path: string | null) => void;
   onOpen: (path: string) => void;
   onEdit?: (path: string) => void;
+  onStudio?: (path: string) => void;
   selected: boolean;
   onSelect: (path: string, extend: boolean) => void;
+  favorite?: boolean;
+  onFavorite?: (path: string) => void;
 };
 
 function useSeen<T extends HTMLElement>(
@@ -51,8 +55,11 @@ export function ClipCard({
   onHover,
   onOpen,
   onEdit,
+  onStudio,
   selected,
   onSelect,
+  favorite = false,
+  onFavorite,
 }: CardProps) {
   const ref = useSeen<HTMLElement>(onVisible, item.path);
   const [revealError, setRevealError] = useState(false);
@@ -63,9 +70,11 @@ export function ClipCard({
       tabIndex={0}
       aria-label={`Play ${item.name}`}
       onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onOpen(item.path); } }}
-      className={
-        selected ? "clip-card is-selected" : hot ? "clip-card is-hot" : "clip-card"
-      }
+      className={[
+        "clip-card",
+        selected ? "is-selected" : hot ? "is-hot" : "",
+        favorite ? "is-favorite" : "",
+      ].filter(Boolean).join(" ")}
       onMouseEnter={() => onHover(item.path)}
       onMouseLeave={() => onHover(null)}
       onClick={(event) => {
@@ -90,20 +99,27 @@ export function ClipCard({
       <div className="clip-frame">
         <span className="clip-ratio" />
         <Poster poster={poster} />
-        {onEdit ? (
+        {onFavorite ? (
           <button
             type="button"
-            className="clip-edit"
-            aria-label={`Edit ${item.name}`}
-            title="Open editor"
+            className={favorite ? "clip-star is-on" : "clip-star"}
+            aria-label={favorite ? `Remove ${item.name} from favorites` : `Add ${item.name} to favorites`}
+            aria-pressed={favorite}
             onClick={(event) => {
               event.stopPropagation();
-              onEdit(item.path);
+              onFavorite(item.path);
             }}
           >
-            <Icon name="edit" />
-            <span>Edit</span>
+            <Icon name="star" />
           </button>
+        ) : null}
+        {onEdit && onStudio ? (
+          <EditMenu
+            label="Edit"
+            className="clip-edit"
+            onQuick={() => onEdit(item.path)}
+            onStudio={() => onStudio(item.path)}
+          />
         ) : null}
       </div>
       <div className="clip-caption">
@@ -129,6 +145,8 @@ type SideProps = {
   selected: boolean;
   onSelect: (path: string, extend: boolean) => void;
   thumbSize: number;
+  favorite?: boolean;
+  onFavorite?: (path: string) => void;
 };
 
 export function SideClip({
@@ -140,6 +158,8 @@ export function SideClip({
   selected,
   onSelect,
   thumbSize,
+  favorite = false,
+  onFavorite,
 }: SideProps) {
   const ref = useSeen<HTMLButtonElement>(onVisible, item.path);
 
@@ -148,9 +168,12 @@ export function SideClip({
       ref={ref}
       type="button"
       style={{ "--side-thumb-size": `${thumbSize}px` } as CSSProperties}
-      className={
-        selected ? "side-clip is-selected" : active ? "side-clip is-on" : "side-clip"
-      }
+      className={[
+        "side-clip",
+        selected ? "is-selected" : "",
+        active ? "is-on" : "",
+        favorite ? "is-favorite" : "",
+      ].filter(Boolean).join(" ")}
       onClick={(event) => {
         if (event.shiftKey || event.ctrlKey || event.metaKey) {
           onSelect(item.path, event.shiftKey);
@@ -170,8 +193,29 @@ export function SideClip({
         }}
         onChange={() => undefined}
       />
-      <span className="side-thumb">
+      <span className={favorite ? "side-thumb is-favorite" : "side-thumb"}>
         <Poster poster={poster} />
+        {onFavorite ? (
+          <span
+            role="button"
+            tabIndex={0}
+            className={favorite ? "clip-star is-on" : "clip-star"}
+            aria-label={favorite ? `Remove ${item.name} from favorites` : `Add ${item.name} to favorites`}
+            aria-pressed={favorite}
+            onClick={(event) => {
+              event.stopPropagation();
+              onFavorite(item.path);
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              event.stopPropagation();
+              onFavorite(item.path);
+            }}
+          >
+            <Icon name="star" />
+          </span>
+        ) : null}
       </span>
       <span className="side-name" title={item.name}>
         {clipTitle(item.name)}

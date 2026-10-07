@@ -9,8 +9,16 @@ import {
   systemAudioConstraints,
 } from "../player/replayAudio";
 
-// H.264 first; VP8 avoids the considerably heavier VP9 fallback on many systems.
-const MIMES = ["video/webm;codecs=h264,opus", "video/webm;codecs=vp8,opus", "video/webm;codecs=vp9,opus", "video/webm"];
+// High profile first so Windows uses the hardware encoder. The plain h264
+// token is the software encoder, which settles near 22 fps on a busy screen.
+const MIMES = [
+  "video/x-matroska;codecs=avc1.640028,opus",
+  "video/webm;codecs=avc1.640028,opus",
+  "video/webm;codecs=h264,opus",
+  "video/webm;codecs=vp8,opus",
+  "video/webm;codecs=vp9,opus",
+  "video/webm",
+];
 const MIC_MIMES = ["audio/webm;codecs=opus", "audio/webm"];
 const SYSTEM_AUDIO_BITS = 320_000;
 
@@ -29,30 +37,61 @@ function openRecorder(stream: MediaStream, mime: string, videoBits: number, audi
   });
 }
 
+function startPictureRecorder(stream: MediaStream, videoBits: number, audioBits: number): MediaRecorder {
+  const candidates = MIMES.filter((mime) => MediaRecorder.isTypeSupported(mime));
+  if (candidates.length === 0) candidates.push("");
+  let last: unknown;
+  for (const mime of candidates) {
+    try {
+      const recorder = openRecorder(stream, mime, videoBits, audioBits);
+      recorder.start();
+      return recorder;
+    } catch (error) {
+      last = error;
+    }
+  }
+  throw last instanceof Error ? last : new Error("Recording failed.");
+}
+
 function copyBytes(bytes: Uint8Array): Uint8Array {
   return new Uint8Array(bytes);
 }
 
-/** One requestData, one blob. The recorder itself is never stopped between slices. */
-function pullBlob(recorder: MediaRecorder): Promise<Blob> {
+/**
+ * One requestData. A blob with bytes ends the wait. An empty blob means the
+ * recorder was already flushed, so it counts once a short follow-up wait ends.
+ * A flush that never answers still resolves empty, so Save can finish.
+ */
+function pullBlob(recorder: MediaRecorder, flushing: boolean): Promise<Blob> {
   return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => {
-      recorder.removeEventListener("dataavailable", onData);
-      reject(new Error("Capture produced no frames."));
-    }, 8000);
-    const onData = (event: BlobEvent): void => {
-      if (!event.data.size) return;
+    let settled = false;
+    let emptyWait = 0;
+    const finish = (error: Error | null, blob?: Blob): void => {
+      if (settled) return;
+      settled = true;
       window.clearTimeout(timer);
+      window.clearTimeout(emptyWait);
       recorder.removeEventListener("dataavailable", onData);
-      resolve(event.data);
+      if (error) reject(error);
+      else resolve(blob ?? new Blob());
+    };
+    const timer = window.setTimeout(() => {
+      if (flushing) finish(null, new Blob());
+      else finish(new Error("Capture produced no frames."));
+    }, flushing ? 5000 : 8000);
+    const onData = (event: BlobEvent): void => {
+      if (event.data.size > 0) {
+        finish(null, event.data);
+        return;
+      }
+      if (emptyWait) return;
+      emptyWait = window.setTimeout(() => finish(null, event.data), 500);
     };
     recorder.addEventListener("dataavailable", onData);
     try {
       recorder.requestData();
     } catch (error) {
-      window.clearTimeout(timer);
-      recorder.removeEventListener("dataavailable", onData);
-      reject(error);
+      finish(error instanceof Error ? error : new Error("Capture produced no frames."));
     }
   });
 }
@@ -77,6 +116,7 @@ export function ReplayCapture() {
       let mixed: MediaStream | null = null;
       let voiceStream: MediaStream | null = null;
       let videoRec: MediaRecorder | null = null;
+      let sink: HTMLVideoElement | null = null;
       let micRec: MediaRecorder | null = null;
       const release = (): void => {
         if (videoRec && videoRec.state !== "inactive") videoRec.stop();
@@ -86,6 +126,12 @@ export function ReplayCapture() {
         mixed?.getTracks().forEach((track) => track.stop());
         voiceStream?.getTracks().forEach((track) => track.stop());
         if (context && context.state !== "closed") void context.close();
+        if (sink) {
+          sink.pause();
+          sink.srcObject = null;
+          sink.remove();
+          sink = null;
+        }
       };
       signal.addEventListener("abort", release, { once: true });
       try {
@@ -139,15 +185,20 @@ export function ReplayCapture() {
         };
         try { await video.applyConstraints(constraints); } catch { /* keep the size already opened */ }
         video.contentHint = "motion";
+        sink = document.createElement("video");
+        sink.muted = true;
+        sink.playsInline = true;
+        sink.style.cssText = "position:fixed;width:2px;height:2px;opacity:0;pointer-events:none";
+        sink.srcObject = new MediaStream([video]);
+        document.body.appendChild(sink);
+        void sink.play().catch(() => undefined);
         trace("track", { ...video.getSettings(), hint: video.contentHint });
         if (signal.aborted) return;
         const tracks: MediaStreamTrack[] = [video];
         const system = options.systemAudio ? display.getAudioTracks()[0] : undefined;
-        if (system) {
-          await releaseSystemProcessing(system);
-          tracks.push(system);
-        }
+        if (system) await releaseSystemProcessing(system);
         let micOn = false;
+        let voiceTrack: MediaStreamTrack | undefined;
         if (options.mic) {
           try {
             mic = await navigator.mediaDevices.getUserMedia({
@@ -157,45 +208,46 @@ export function ReplayCapture() {
               video: false,
             });
             if (signal.aborted) return;
-            let voiceTrack = mic.getAudioTracks()[0];
+            voiceTrack = mic.getAudioTracks()[0];
             if (!voiceTrack) throw new Error("No microphone.");
+            context = new AudioContext({ latencyHint: "interactive" });
+            const dest = context.createMediaStreamDestination();
+            const voiceGain = context.createGain();
+            voiceGain.gain.value = options.micGain;
+            const source = context.createMediaStreamSource(new MediaStream([voiceTrack]));
+            const node = options.micHum ? humFilter(context, source) : source;
+            node.connect(voiceGain).connect(dest);
             if (system) {
-              if (options.micHum) {
-                context = new AudioContext({ latencyHint: "playback" });
-                const dest = context.createMediaStreamDestination();
-                humFilter(context, context.createMediaStreamSource(mic)).connect(dest);
-                await context.resume();
-                voiceTrack = dest.stream.getAudioTracks()[0];
-              }
+              const desktop = context.createGain();
+              desktop.gain.value = options.systemGain;
+              const desktopIn = context.createMediaStreamSource(new MediaStream([system]));
+              desktopIn.connect(desktop).connect(dest);
+            }
+            await context.resume();
+            tracks.push(dest.stream.getAudioTracks()[0]);
+            micOn = true;
+          } catch {
+            if (signal.aborted) return;
+            if (context && context.state !== "closed") void context.close();
+            context = null;
+            if (voiceTrack) {
               voiceStream = new MediaStream([voiceTrack]);
               micOn = true;
-            } else {
-              context = new AudioContext({ latencyHint: "playback" });
-              const dest = context.createMediaStreamDestination();
-              const gain = context.createGain();
-              gain.gain.value = options.micGain;
-              let node: AudioNode = context.createMediaStreamSource(mic);
-              if (options.micHum) node = humFilter(context, node);
-              node.connect(gain).connect(dest);
-              await context.resume();
-              tracks.push(dest.stream.getAudioTracks()[0]);
-              micOn = true;
             }
-          } catch { if (signal.aborted) return; }
+          }
         }
+        if (system && !micOn) tracks.push(system);
         if (signal.aborted) return;
-        const mime = MIMES.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? "";
         const micMime = MIC_MIMES.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? "";
         mixed = new MediaStream(tracks);
-        videoRec = openRecorder(mixed, mime, options.bitrateKbps * 1000, SYSTEM_AUDIO_BITS);
-        if (voiceStream) micRec = openRecorder(voiceStream, micMime, 0, 128_000);
-        videoRec.start();
+        videoRec = startPictureRecorder(mixed, options.bitrateKbps * 1000, SYSTEM_AUDIO_BITS);
+        const mime = videoRec.mimeType;
+        trace("recorder", { mime });
         const videoMark = performance.now();
+        if (voiceStream) micRec = openRecorder(voiceStream, micMime, 0, 128_000);
         micRec?.start();
         const micMark = performance.now();
-        const latencyMs = context && voiceStream
-          ? (context.baseLatency + context.outputLatency) * 1000 : 0;
-        const micLeadMs = micRec ? (micMark - videoMark) - latencyMs : 0;
+        const micLeadMs = micRec ? micMark - videoMark : 0;
         const actual = video.getSettings();
         window.lumen.replayCaptureReady({
           sessionId: options.sessionId,
@@ -224,8 +276,22 @@ export function ReplayCapture() {
           const id = flushId;
           flushId = undefined;
           const startedAt = performance.timeOrigin + lastCut;
-          const pictureBlob = await pullBlob(videoRec);
-          const voiceBlob = micRec ? await pullBlob(micRec) : null;
+          const pictureBlob = await pullBlob(videoRec, Boolean(id));
+          if (signal.aborted) return;
+          if (!pictureBlob.size) {
+            if (id) {
+              await window.lumen.replaySegment({
+                sessionId: options.sessionId,
+                bytes: new Uint8Array(),
+                duration: 0.001,
+                startedAt,
+                endedAt: performance.timeOrigin + performance.now(),
+                flushId: id,
+              });
+            }
+            return;
+          }
+          const voiceBlob = micRec ? await pullBlob(micRec, Boolean(id)) : null;
           const endedAt = performance.timeOrigin + performance.now();
           lastCut = performance.now();
           if (signal.aborted) return;
@@ -236,7 +302,7 @@ export function ReplayCapture() {
           if (headerBytes) videoHeaderSent = true;
           let micBytes: Uint8Array | undefined;
           let micHeaderBytes: Uint8Array | undefined;
-          if (voiceBlob) {
+          if (voiceBlob && voiceBlob.size > 0) {
             const voice = splitWebmChunk(
               new Uint8Array(await voiceBlob.arrayBuffer()),
               micClusterMs,
@@ -308,7 +374,41 @@ export function ReplayCapture() {
       }
     });
     window.lumen.replayCaptureMounted();
-    return () => { active?.abort(); offStart(); offStop(); offFlush(); };
+    let outputKey = "";
+    let quietUntil = 0;
+    const watchOutput = async (): Promise<void> => {
+      if (Date.now() < quietUntil) return;
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const output = devices.find((item) => (
+          item.kind === "audiooutput" && item.deviceId === "default"
+        ));
+        const next = output ? `${output.groupId}\n${output.label}` : "";
+        if (!next) return;
+        if (!outputKey) {
+          outputKey = next;
+          return;
+        }
+        if (next === outputKey) return;
+        outputKey = next;
+        quietUntil = Date.now() + 4000;
+        await window.lumen.replayRebindAudio();
+      } catch (error) {
+        console.error("[replay] output device", error);
+      }
+    };
+    const onDevices = (): void => { void watchOutput(); };
+    navigator.mediaDevices.addEventListener("devicechange", onDevices);
+    const outputTimer = window.setInterval(() => { void watchOutput(); }, 2000);
+    void watchOutput();
+    return () => {
+      active?.abort();
+      offStart();
+      offStop();
+      offFlush();
+      navigator.mediaDevices.removeEventListener("devicechange", onDevices);
+      window.clearInterval(outputTimer);
+    };
   }, []);
   return null;
 }

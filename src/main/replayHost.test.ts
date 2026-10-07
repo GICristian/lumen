@@ -37,6 +37,7 @@ vi.mock("electron", async () => {
         }
         if (channel === "replay:capture-stop") this.recording = false;
       },
+      setFrameRate() {},
     });
     constructor(_options: unknown) { super(); harness.windows.push(this); }
     async loadURL(url: string) { if (!url.startsWith("data:")) queueMicrotask(() => ipc.emit("replay:capture-mounted", { sender: this.webContents })); }
@@ -48,7 +49,7 @@ vi.mock("electron", async () => {
   }
   const display = { id: 1, bounds: { x: 0, y: 0, width: 1920, height: 1080 }, scaleFactor: 1 };
   return { BrowserWindow: Window, ipcMain: Object.assign(ipc, { handle: (channel: string, fn: (...args: any[]) => any) => harness.handlers.set(channel, fn) }),
-    app: { getPath: () => harness.root }, screen: { getCursorScreenPoint: () => ({ x: 0, y: 0 }), getDisplayNearestPoint: () => display, getDisplayMatching: () => display, getAllDisplays: () => [display], on() {}, removeListener() {} },
+    app: { getPath: () => harness.root }, screen: { getCursorScreenPoint: () => ({ x: 0, y: 0 }), getDisplayNearestPoint: () => display, getDisplayMatching: () => display, getAllDisplays: () => [display], getPrimaryDisplay: () => display, on() {}, removeListener() {} },
     session: { defaultSession: { setDisplayMediaRequestHandler() {}, setPermissionRequestHandler() {} } },
     desktopCapturer: { getSources: async () => [] }, dialog: {},
   };

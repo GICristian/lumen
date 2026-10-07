@@ -3,6 +3,33 @@ import { coversDisplay, type PixelDisplay } from "@shared/displayCover";
 
 const user32 = koffi.load("user32.dll");
 const kernel32 = koffi.load("kernel32.dll");
+const winmm = koffi.load("winmm.dll");
+const timeBeginPeriod = winmm.func("uint32 __stdcall timeBeginPeriod(uint32 period)");
+const timeEndPeriod = winmm.func("uint32 __stdcall timeEndPeriod(uint32 period)");
+let captureClockHeld = false;
+
+/**
+ * A 30 fps capture timer on Windows slips to about 22 fps unless the
+ * system timer is at 1 ms. Held for the whole time replay is armed.
+ */
+export function holdCaptureClock(): void {
+  if (process.platform !== "win32" || captureClockHeld) return;
+  try {
+    if (timeBeginPeriod(1) === 0) captureClockHeld = true;
+  } catch (error) {
+    console.error("capture clock", error);
+  }
+}
+
+export function releaseCaptureClock(): void {
+  if (!captureClockHeld) return;
+  captureClockHeld = false;
+  try {
+    timeEndPeriod(1);
+  } catch (error) {
+    console.error("capture clock", error);
+  }
+}
 
 const rectType = koffi.struct("LumenRect", {
   left: "int32",
@@ -35,6 +62,14 @@ const attachThreadInput = user32.func(
   "bool __stdcall AttachThreadInput(uint32 from, uint32 to, bool attach)",
 );
 const getCurrentThreadId = kernel32.func("uint32 __stdcall GetCurrentThreadId()");
+const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+const openProcess = kernel32.func(
+  "void* __stdcall OpenProcess(uint32 access, int inherit, uint32 pid)",
+);
+const closeHandle = kernel32.func("int __stdcall CloseHandle(void* handle)");
+const queryImageName = kernel32.func(
+  "int __stdcall QueryFullProcessImageNameW(void* process, uint32 flags, _Out_ uint16* name, _Inout_ uint32* size)",
+);
 const isWindow = user32.func("bool __stdcall IsWindow(void* hWnd)");
 const getWindowPlacement = user32.func(
   "bool __stdcall GetWindowPlacement(void* hWnd, _Inout_ void* place)",
@@ -217,6 +252,77 @@ export function restoreForeground(): void {
   const target = takeForeground();
   if (target === null) return;
   focusWindow(target);
+}
+
+function processImage(pid: number): { name: string; imagePath: string } | null {
+  if (pid <= 0) return null;
+  let handle: unknown = null;
+  try {
+    handle = openProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+    if (!handle) return null;
+    const buffer = new Uint16Array(520);
+    const size = [buffer.length];
+    if (!queryImageName(handle, 0, buffer, size)) return null;
+    const chars = size[0];
+    if (!Number.isFinite(chars) || chars <= 0) return null;
+    const text = Buffer.from(buffer.buffer, buffer.byteOffset, chars * 2).toString("utf16le");
+    const base = text.split(/[/\\]/).pop() ?? "";
+    const stem = base.replace(/\.exe$/i, "").trim();
+    if (!stem) return null;
+    return { name: stem, imagePath: text };
+  } catch (error) {
+    console.error("process name", error);
+    return null;
+  } finally {
+    if (handle) {
+      try {
+        closeHandle(handle);
+      } catch (error) {
+        console.error("process name", error);
+      }
+    }
+  }
+}
+
+export type FocusedApp = {
+  name: string | null;
+  fullscreen: boolean;
+  imagePath: string | null;
+};
+
+/**
+ * The window in front, or the one the overlay was covering.
+ * Fullscreen is true when that window fills a monitor.
+ */
+export function focusedApp(displays: PixelDisplay[]): FocusedApp {
+  try {
+    let hwnd = asHwnd(getForegroundWindow());
+    if (hwnd !== 0n) {
+      const owner = [0];
+      getWindowThreadProcessId(hwnd, owner);
+      if (owner[0] === process.pid) {
+        const saved = savedForeground();
+        if (saved) hwnd = saved;
+      }
+    }
+    if (hwnd === 0n || isShell(hwnd)) return { name: null, fullscreen: false, imagePath: null };
+    const pid = [0];
+    getWindowThreadProcessId(hwnd, pid);
+    if (pid[0] === process.pid) return { name: null, fullscreen: false, imagePath: null };
+    const rect = windowRect(hwnd);
+    const fullscreen = rect
+      ? displays.some((display) => coversDisplay(rect, display))
+      : false;
+    const image = processImage(pid[0]);
+    return {
+      name: image?.name ?? null,
+      fullscreen,
+      imagePath: image?.imagePath ?? null,
+    };
+  } catch (error) {
+    console.error("focused app", error);
+    return { name: null, fullscreen: false, imagePath: null };
+  }
 }
 
 /** True when another app is borderless or exclusive on one of these monitors. */

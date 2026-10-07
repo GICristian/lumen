@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildFileMixSaveArgs, buildMixSaveArgs, buildSaveArgs, concatLine, encodeVideoArgs, pictureBroken, replayFileName, segmentsToDrop, replayDimensions, replayBuffer, replayTail } from "./replay";
+import {
+  buildFileMixSaveArgs, buildFileSaveArgs, buildMixSaveArgs, buildSaveArgs, concatLine,
+  encodeVideoArgs, pictureBroken, replayFileName, segmentsToDrop, replayDimensions,
+  replayBuffer, replayTail, replayDisplay,
+} from "./replay";
 
 describe("capture sizing and duration", () => {
   it("scales the full screen without stretching, cropping or upscaling", () => {
@@ -12,6 +16,10 @@ describe("capture sizing and duration", () => {
     expect(replayBuffer(73)).toBe(73);
     expect(replayBuffer(0)).toBe(60);
     expect(replayBuffer(9999)).toBe(900);
+    expect(replayDisplay("screen:4:0")).toBe("screen:4:0");
+    expect(replayDisplay("")).toBe("");
+    expect(replayDisplay("not-a-screen")).toBe("");
+    expect(replayDisplay(4)).toBe("");
     expect(replayTail([{ duration: 4 }, { duration: 4 }, { duration: 1 }], 5)).toEqual([{ duration: 4 }, { duration: 1 }]);
   });
 });
@@ -53,6 +61,7 @@ describe("save", () => {
     const ahead = buildFileMixSaveArgs("v.webm", "m.webm", "out.mp4", true, 8, "libx264", 1, 1.6, 12, 11.96, 40);
     const aheadText = ahead.join(" ");
     expect(aheadText).toContain("adelay=40|40");
+    expect(aheadText).not.toContain("anlms");
     expect(aheadText).toContain("normalize=0");
     expect(aheadText).toContain("atrim=start=12.000");
     expect(aheadText).toContain("atrim=start=11.960");
@@ -60,5 +69,17 @@ describe("save", () => {
     const behind = buildFileMixSaveArgs("v.webm", "m.webm", "out.mp4", false, 8, "libx264", 1, 1, 0, 0, -30);
     expect(behind.join(" ")).toContain("atrim=start=0.030");
     expect(behind.join(" ")).not.toContain("adelay=");
+    const shoved = buildFileMixSaveArgs("v.webm", "m.webm", "out.mp4", true, 8, "libx264", 1, 1, 0, 0, 500, true);
+    const shovedText = shoved.join(" ");
+    expect(shovedText).toContain("adelay=80|80");
+    expect(shovedText).not.toContain("adelay=500");
+    expect(shovedText).toContain("highpass=f=80");
+    const straight = buildFileSaveArgs("in.webm", "out.mp4", true, 12, "libx264", 1.7, 1);
+    expect(straight).toContain("copy");
+    expect(straight).not.toContain("aac");
+    expect(straight.join(" ")).not.toContain("atrim");
+    const louder = buildFileSaveArgs("in.webm", "out.mp4", true, 12, "libx264", 0, 1.5);
+    expect(louder.join(" ")).toContain("volume=1.500");
+    expect(louder).toContain("aac");
   });
 });

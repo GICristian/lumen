@@ -28,6 +28,8 @@ type Props = {
   onExport: (request: ExportRequest) => void;
   onCancel: () => void;
   status: string | null;
+  favorite?: boolean;
+  onFavorite?: () => void;
 };
 
 const unplayable = "This clip can't be played. Download still uses the original file.";
@@ -48,6 +50,8 @@ export function OverlayDetail({
   onExport,
   onCancel,
   status,
+  favorite = false,
+  onFavorite,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -212,6 +216,7 @@ export function OverlayDetail({
     if (!prepared?.ffmpegOk || busy) return;
     const copyOnly = requiresStreamCopy(probe?.videoCodec ?? null);
     const known = duration > 0;
+    const cut = trimOn && known && span + 0.05 < duration;
     if (copyOnly && bitrate !== null) {
       setNotice("AV1 can't be resized, so this saves a copy of the clip.");
     }
@@ -222,8 +227,9 @@ export function OverlayDetail({
       duration: known ? duration : 0,
       crop: cropMode ? cropRect : null,
       hasAudio,
-      precise: cropMode || (!copyOnly && bitrate !== null),
+      precise: cropMode || (!copyOnly && (cut || bitrate !== null)),
       videoBitrateKbps: copyOnly ? null : bitrate,
+      volume,
     });
   }
 
@@ -277,13 +283,25 @@ export function OverlayDetail({
   return (
     <div className="overlay-detail">
       <div className="overlay-detail-bar">
-        <button type="button" className="icon-btn" aria-label="Back" onClick={onBack}>
+        <button type="button" className="overlay-back" aria-label="Back to clips" onClick={onBack}>
           <Icon name="back" />
+          <span>Back</span>
         </button>
         <div className="overlay-title" title={item.name}>
           {clipTitle(item.name)}
         </div>
         <VolumeControl value={volume} onChange={(next) => { onVolume(next); if (videoRef.current) videoRef.current.volume = next; }} />
+        {onFavorite ? (
+          <button
+            type="button"
+            className={favorite ? "icon-btn is-favorite" : "icon-btn"}
+            aria-label={favorite ? "Remove from favorites" : "Add to favorites"}
+            aria-pressed={favorite}
+            onClick={onFavorite}
+          >
+            <Icon name="star" />
+          </button>
+        ) : null}
         <button type="button" className="icon-btn" aria-label="Show in folder" data-tooltip="Show in folder" onClick={() => void window.lumen.showItem(item.path).catch(() => setNotice('Could not show this file in its folder.'))}><Icon name="folder" /></button>
       </div>
       <div className={cropMode ? "overlay-stage is-cropping" : "overlay-stage"} ref={stageRef}>

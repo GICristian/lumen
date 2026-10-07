@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import type { FolderItem } from "@shared/contracts";
+import type { FolderItem, LumenFolder } from "@shared/contracts";
 import type { ClipSort } from "@shared/clips";
 import { formatBytes, formatWhen } from "@shared/clips";
+import { isFavorite } from "@shared/favorites";
 import { Poster } from "./ClipCard";
+import { EditMenu } from "./EditMenu";
+import { FolderBrowser } from "./FolderBrowser";
 import { Icon } from "./Icon";
 
 type Props = {
@@ -23,8 +26,13 @@ type Props = {
   onChangeFolder: () => void;
   onSelectFolder: (path: string) => void;
   onEdit: (filePath: string) => void;
+  onStudio: (filePath: string) => void;
   onSelect: (filePath: string, extend: boolean) => void;
   deleteSlot: ReactNode;
+  lumenFolders: LumenFolder[];
+  folderPath: string | null;
+  favorites: string[];
+  onFavorite: (filePath: string) => void;
 };
 
 function ClipCheck({
@@ -67,8 +75,13 @@ export function FolderList({
   onChangeFolder,
   onSelectFolder,
   onEdit,
+  onStudio,
   onSelect,
   deleteSlot,
+  lumenFolders,
+  folderPath,
+  favorites,
+  onFavorite,
 }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const headRef = useRef<HTMLDivElement>(null);
@@ -137,6 +150,12 @@ export function FolderList({
           </button>
         </div>
         {deleteSlot}
+        <FolderBrowser
+          folders={lumenFolders}
+          current={folderPath}
+          onOpen={onSelectFolder}
+          onBrowse={onChangeFolder}
+        />
       </div>
       <div className="folder-list" ref={listRef}>
         {items.length === 0 ? <p className="muted pad">No videos in this folder</p> : null}
@@ -147,7 +166,7 @@ export function FolderList({
             <div
               key={item.path}
               data-video-path={item.path}
-              className={`folder-row${active ? " is-active" : ""}${picked ? " is-selected" : ""}`}
+              className={`folder-row${active ? " is-active" : ""}${picked ? " is-selected" : ""}${isFavorite(favorites, item.path) ? " is-favorite" : ""}`}
               tabIndex={0}
               aria-label={`Play ${item.name}${active ? ", current clip" : ""}`}
               onKeyDown={(event) => {
@@ -163,12 +182,39 @@ export function FolderList({
               }}
             >
               <ClipCheck checked={picked} onPick={(extend) => onSelect(item.path, extend)} />
-              <span className="folder-thumb"><Poster poster={posters[item.path]} /></span>
+              <span className={isFavorite(favorites, item.path) ? "folder-thumb is-favorite" : "folder-thumb"}>
+                <Poster poster={posters[item.path]} />
+                <span
+                  role="button"
+                  tabIndex={0}
+                  className={isFavorite(favorites, item.path) ? "clip-star is-on" : "clip-star"}
+                  aria-label={isFavorite(favorites, item.path) ? `Remove ${item.name} from favorites` : `Add ${item.name} to favorites`}
+                  aria-pressed={isFavorite(favorites, item.path)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onFavorite(item.path);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onFavorite(item.path);
+                  }}
+                >
+                  <Icon name="star" />
+                </span>
+              </span>
               <span className="folder-labels">
                 <span className="folder-name" title={item.name}>{item.name}</span>
                 <span className="folder-meta">{formatWhen(item.mtimeMs)} · {formatBytes(item.sizeBytes)}</span>
               </span>
-              <button type="button" className="folder-edit" title="Open editor" aria-label={`Edit ${item.name}`} onClick={(event) => { event.stopPropagation(); onEdit(item.path); }}>Edit</button>
+              <EditMenu
+                label="Edit"
+                className="folder-edit"
+                showIcon={false}
+                onQuick={() => onEdit(item.path)}
+                onStudio={() => onStudio(item.path)}
+              />
             </div>
           );
         })}

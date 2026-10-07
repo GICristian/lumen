@@ -1,4 +1,4 @@
-type Name = "play" | "pause" | "folder" | "gear" | "full" | "volume" | "close" | "search" | "back" | "lock" | "edit" | "record";
+type Name = "play" | "pause" | "folder" | "gear" | "full" | "volume" | "close" | "search" | "back" | "lock" | "edit" | "record" | "star" | "bell";
 
 type ExtendedName = Name | "previous" | "next" | "loop";
 const paths: Record<ExtendedName, string> = {
@@ -30,6 +30,8 @@ const paths: Record<ExtendedName, string> = {
   lock: "M7 10V7a5 5 0 0 1 10 0v3M6 10h12v10H6zM12 14v2",
   edit: "m14 5 5 5M4 20l4-.8L19 8a2.12 2.12 0 0 0-3-3L5 16z",
   record: "M12 5a7 7 0 1 0 0 14 7 7 0 0 0 0-14Z",
+  star: "M12 3.2 14.7 8.7 20.8 9.6 16.4 13.9 17.4 20 12 17.1 6.6 20 7.6 13.9 3.2 9.6 9.3 8.7 12 3.2Z",
+  bell: "M6 9a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9M10 21a2 2 0 0 0 4 0",
 };
 
 export function Icon({ name }: { name: ExtendedName }) {

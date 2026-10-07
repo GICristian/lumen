@@ -22,6 +22,13 @@ export function replayDevice(value: unknown): string {
   return typeof value === "string" && value.length <= 512 ? value : "";
 }
 
+/** Empty follows the cursor. Anything else must be a desktop-capturer screen id. */
+export function replayDisplay(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const id = value.trim();
+  return /^screen:\d+:\d+$/.test(id) ? id : "";
+}
+
 export function replayBudget(seconds: number, kbps: number): number {
   return Math.ceil((seconds + REPLAY_SEGMENT_SECONDS * 2) * (kbps + 160) * 1000 / 8);
 }
@@ -143,6 +150,12 @@ function mediaTail(
   return args;
 }
 
+const MIC_HUM = [
+  "highpass=f=80",
+  "bandreject=f=50:width_type=q:w=10",
+  "bandreject=f=100:width_type=q:w=10",
+].join(",");
+
 function gainFilter(base: string, gain: number): string {
   return Math.abs(gain - 1) < 0.001 ? base : `${base},volume=${gain.toFixed(3)}`;
 }
@@ -155,7 +168,8 @@ function pictureLead(start: number, chain: string): string {
 
 /**
  * One continuous recording. `start` is how long the sound runs before the first
- * decodable frame. `micLeadMs` > 0 means the microphone file is ahead of the picture.
+ * decodable frame. A straight copy writes the buffer as it was recorded.
+ * A volume change is the case that has to decode the sound.
  */
 export function buildFileSaveArgs(
   input: string,
@@ -167,13 +181,24 @@ export function buildFileSaveArgs(
   systemGain = 1,
 ): string[] {
   const args = ["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", input];
-  if (duration !== undefined && Number.isFinite(duration) && duration > 0) args.push("-t", duration.toFixed(6));
+  if (duration !== undefined && Number.isFinite(duration) && duration > 0) {
+    args.push("-t", duration.toFixed(6));
+  }
+  if (copy && Math.abs(systemGain - 1) < 0.001) {
+    args.push("-c", "copy", "-movflags", "+faststart", output);
+    return args;
+  }
   args.push("-af", gainFilter(pictureLead(start, "aresample=48000"), systemGain));
   args.push(...mediaTail(copy, encoder, output, "256k", true));
   return args;
 }
 
-/** Picture file plus the microphone file from the same continuous take. */
+/**
+ * Picture file plus the microphone file from the same continuous take.
+ * `micLeadMs` > 0 means the microphone file is ahead of the picture.
+ * The picture is the recording already encoded. Save copies it and only
+ * mixes the microphone into the audio.
+ */
 export function buildFileMixSaveArgs(
   video: string,
   mic: string,
@@ -186,14 +211,16 @@ export function buildFileMixSaveArgs(
   videoStart = 0,
   micStart = 0,
   micLeadMs = 0,
+  micHum = false,
 ): string[] {
   const args = ["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", video, "-i", mic];
   if (duration !== undefined && Number.isFinite(duration) && duration > 0) args.push("-t", duration.toFixed(6));
-  const shift = Math.max(-500, Math.min(500, micLeadMs));
+  const shift = Math.max(-80, Math.min(80, micLeadMs));
   const voice: string[] = [];
   if (shift > 1) voice.push(`adelay=${Math.round(shift)}|${Math.round(shift)}`);
   if (shift < -1) voice.push(`atrim=start=${(-shift / 1000).toFixed(3)}`, "asetpts=PTS-STARTPTS");
   voice.push("aresample=48000");
+  if (micHum) voice.push(MIC_HUM);
   const system = gainFilter(pictureLead(videoStart, "aresample=48000"), systemGain);
   const micChain = gainFilter(pictureLead(micStart, voice.join(",")), micGain);
   const mix = `[0:a]${system}[sys];[1:a]${micChain}[mic];`

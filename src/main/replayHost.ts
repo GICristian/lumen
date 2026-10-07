@@ -10,7 +10,7 @@ import {
 import { spawn, spawnSync } from "node:child_process";
 import { createReadStream, createWriteStream, promises as fs } from "node:fs";
 import path from "node:path";
-import type { ReplayCaptureOptions, ReplayStatus, ReplaySegment, ReplayCaptureInfo } from "@shared/contracts";
+import type { ReplayCaptureOptions, ReplayScreen, ReplayStatus, ReplaySegment, ReplayCaptureInfo } from "@shared/contracts";
 import {
   buildFileMixSaveArgs,
   buildFileSaveArgs,
@@ -22,8 +22,10 @@ import {
   replayFileName,
   replayFps,
   replayHeight,
-  replayGain, replayBitrate, replayDevice,
+  replayGain, replayBitrate, replayDevice, replayDisplay,
 } from "@shared/replay";
+import { displayAppName } from "@shared/appTitle";
+import { replayFolderName } from "@shared/captureFolder";
 import { firstKeyframeSeconds, firstSampleSeconds, timecodeScaleNs } from "@shared/webmPieces";
 import { showReplayToast, dismissReplayToast } from "./replayToast";
 import { replayLog } from "./replayLog";
@@ -39,9 +41,14 @@ import {
   setTrayTooltip,
   withOverlayRelaxed,
 } from "./overlayHost";
-import { foregroundCovers } from "./win32";
+import { productName } from "./productName";
+import { focusedApp, foregroundCovers, holdCaptureClock, releaseCaptureClock } from "./win32";
 import { getSettings, patchSettings } from "./settings";
+import { recordActivity } from "./activity";
+import { rememberLumenFolder } from "./lumenFolders";
 import { indicatorBounds, RECORDING_INDICATOR_HTML } from "@shared/recordingIndicator";
+
+const DEVICE_NOTICE = "Playback device changed. The buffer started over.";
 
 let bufferDir = "";
 let capture: BrowserWindow | null = null;
@@ -61,6 +68,8 @@ let notice: string | null = null;
 let lastFile: string | null = null;
 let encoder = "Screen";
 let captureDisplayId: number | null = null;
+type ListedScreen = ReplayScreen & { displayId: number };
+let listedScreens: ListedScreen[] = [];
 
 function serialize<T>(task: () => Promise<T>): Promise<T> {
   const next = operation.then(task, task);
@@ -81,6 +90,27 @@ function outputDirectory(): string {
   } catch {
     return path.join(app.getPath("userData"), "replays");
   }
+}
+
+function captureTarget(): { dir: string; name: string; imagePath: string | null } {
+  const displays = screen.getAllDisplays().map((item) => ({
+    x: item.bounds.x,
+    y: item.bounds.y,
+    width: item.bounds.width,
+    height: item.bounds.height,
+  }));
+  const appFocus = focusedApp(displays);
+  const titled = displayAppName(
+    appFocus.name,
+    appFocus.imagePath,
+    productName(appFocus.imagePath),
+  );
+  const name = replayFolderName(appFocus.name, titled, appFocus.imagePath);
+  return {
+    dir: path.join(outputDirectory(), name),
+    name,
+    imagePath: name === "Desktop" ? null : appFocus.imagePath,
+  };
 }
 
 function status(): ReplayStatus {
@@ -110,6 +140,11 @@ function status(): ReplayStatus {
     encoder,
     notice,
     lastFile,
+    displayId: settings.replayDisplayId,
+    displays: listedScreens.map((screen) => ({
+      id: screen.id, name: screen.name, width: screen.width, height: screen.height,
+      x: screen.x, primary: screen.primary,
+    })),
   };
 }
 
@@ -192,9 +227,10 @@ function showDot(): void {
 }
 
 function codecLabel(codec: string): string {
-  if (codec.includes("h264")) return "H.264";
-  if (codec.includes("vp9")) return "VP9";
-  if (codec.includes("vp8")) return "VP8";
+  const text = codec.toLowerCase();
+  if (text.includes("h264") || text.includes("avc1")) return "H.264";
+  if (text.includes("vp9")) return "VP9";
+  if (text.includes("vp8")) return "VP8";
   return "Screen";
 }
 
@@ -206,10 +242,46 @@ function clearBuffer(): void {
   void store?.stop().catch(() => undefined);
 }
 
+function captureDisplay(): Electron.Display {
+  const saved = getSettings().replayDisplayId;
+  const listed = listedScreens.find((item) => item.id === saved);
+  const matched = listed
+    ? screen.getAllDisplays().find((item) => item.id === listed.displayId)
+    : undefined;
+  const display = matched ?? screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  captureDisplayId = display.id;
+  return display;
+}
+
+async function refreshDisplays(): Promise<void> {
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ["screen"],
+      thumbnailSize: { width: 0, height: 0 },
+    });
+    const all = screen.getAllDisplays();
+    const primaryId = screen.getPrimaryDisplay().id;
+    listedScreens = sources.flatMap((source, index) => {
+      const display = all.find((item) => String(item.id) === source.display_id) ?? all[index];
+      if (!display || !replayDisplay(source.id)) return [];
+      return [{
+        id: source.id,
+        displayId: display.id,
+        name: source.name || "Screen",
+        width: Math.round(display.bounds.width * display.scaleFactor),
+        height: Math.round(display.bounds.height * display.scaleFactor),
+        x: display.bounds.x,
+        primary: display.id === primaryId,
+      }];
+    });
+  } catch (error) {
+    replayLog("displays-failed", error instanceof Error ? error.message : String(error));
+  }
+}
+
 function captureOptions(): ReplayCaptureOptions {
   const settings = getSettings();
-  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  captureDisplayId = display.id;
+  const display = captureDisplay();
   return { sessionId: store.sessionId, sourceWidth: display.bounds.width * display.scaleFactor,
     sourceHeight: display.bounds.height * display.scaleFactor, fps: settings.replayFps, height: settings.replayHeight, mic: settings.replayMic,
     micDeviceId: settings.replayMicDeviceId, micGain: settings.replayMicGain,
@@ -236,6 +308,7 @@ async function ensureCapture(): Promise<BrowserWindow> {
     height: 180,
     focusable: false,
     skipTaskbar: true,
+    paintWhenInitiallyHidden: true,
     webPreferences: {
       preload: path.join(__dirname, "../preload/index.js"),
       contextIsolation: true,
@@ -244,6 +317,7 @@ async function ensureCapture(): Promise<BrowserWindow> {
       backgroundThrottling: false,
     },
   });
+  win.webContents.setFrameRate(getSettings().replayFps);
   capture = win;
   win.webContents.on("console-message", (event) => {
     const entry = event as { level?: string | number; message?: string; lineNumber?: number };
@@ -367,6 +441,7 @@ type JoinedTake = {
   systemGain: number;
   micGain: number;
   micLeadMs: number;
+  micHum: boolean;
 };
 
 function runSave(
@@ -393,7 +468,7 @@ function runJoined(take: JoinedTake, output: string, copy: boolean, duration: nu
   const args = take.mic
     ? buildFileMixSaveArgs(
       take.video, take.mic, output, copy, duration, encoder,
-      take.systemGain, take.micGain, take.videoStart, take.micStart, take.micLeadMs,
+      take.systemGain, take.micGain, take.videoStart, take.micStart, take.micLeadMs, take.micHum,
     )
     : buildFileSaveArgs(take.video, output, copy, duration, encoder, take.videoStart, take.systemGain);
   return spawnFfmpeg(args);
@@ -420,6 +495,7 @@ function fail(message: string): void {
   tellCapture("replay:capture-stop");
   hideDot();
   notice = message;
+  releaseCaptureClock();
   releaseCapture();
   if (!saving) clearBuffer();
   showReplayToast(true);
@@ -430,10 +506,13 @@ async function arm(): Promise<void> {
   if (armed) return;
   await writeQueue.catch(() => undefined);
   await store.start();
+  await refreshDisplays();
   ready = false;
   captureWidth = 0; captureHeight = 0;
   notice = null;
-  await ensureCapture();
+  holdCaptureClock();
+  const captureWindow = await ensureCapture();
+  captureWindow.webContents.setFrameRate(getSettings().replayFps);
   armed = true;
   showDot();
   tellCapture("replay:capture-start", captureOptions());
@@ -451,6 +530,7 @@ function disarm(): void {
   tellCapture("replay:capture-stop");
   hideDot();
   notice = null;
+  releaseCaptureClock();
   clearBuffer();
   releaseCapture();
   publish();
@@ -461,7 +541,9 @@ async function restart(): Promise<void> {
   ready = false;
   captureWidth = 0; captureHeight = 0;
   await writeQueue;
+  await refreshDisplays();
   await store.start();
+  holdCaptureClock();
   tellCapture("replay:capture-start", captureOptions());
   publish();
 }
@@ -486,7 +568,10 @@ async function saveReplay(cutoff: number, sessionId: string): Promise<void> {
     if (!ready) throw new Error("Capture is still starting. Try saving again in a moment.");
     if (capture && !capture.isDestroyed()) await new Promise<void>((resolve, reject) => {
       const id = `${Date.now()}`;
-      const deadline = setTimeout(() => { pendingFlush = null; reject(new Error("Capture did not finish the latest frames. Try again.")); }, 6000);
+      const deadline = setTimeout(() => {
+        pendingFlush = null;
+        reject(new Error("Capture did not finish the latest frames. Try again."));
+      }, 12000);
       pendingFlush = { id, finish: () => { clearTimeout(deadline); pendingFlush = null; resolve(); } };
       capture!.webContents.send("replay:capture-flush", id);
     });
@@ -528,9 +613,11 @@ async function saveReplay(cutoff: number, sessionId: string): Promise<void> {
         systemGain: settingsNow.replaySystemGain,
         micGain: settingsNow.replayMicGain,
         micLeadMs: store.micLeadMs,
+        micHum: settingsNow.replayMicHum,
       };
     }
-    const dir = outputDirectory();
+    const target = captureTarget();
+    const dir = target.dir;
     await fs.mkdir(dir, { recursive: true });
     const output = await freePath(path.join(dir, replayFileName(new Date())));
     const temporary = `${output}.partial.mp4`;
@@ -576,6 +663,13 @@ async function saveReplay(cutoff: number, sessionId: string): Promise<void> {
     lastFile = output;
     notice = "Saved.";
     savedFlash = true;
+    await rememberLumenFolder({
+      name: target.name,
+      directory: dir,
+      imagePath: target.imagePath,
+      savedAt: Date.now(),
+    });
+    await recordActivity({ kind: "recorded", path: output });
   } catch (error) {
     notice = error instanceof Error ? error.message : "Could not save the replay.";
   } finally {
@@ -619,7 +713,17 @@ function installCaptureHandler(): void {
       types: ["screen"],
       thumbnailSize: { width: 0, height: 0 },
     }).then((sources) => {
-      const match = sources.find((source) => source.display_id === String(display.id))
+      const saved = getSettings().replayDisplayId;
+      const chosen = saved ? sources.find((source) => source.id === saved) : undefined;
+      const disconnected = "That screen is disconnected. Recording the screen under the cursor.";
+      if (saved && !chosen) {
+        notice = disconnected;
+        publish();
+      } else if (notice === disconnected) {
+        notice = null;
+      }
+      const match = chosen
+        ?? sources.find((source) => source.display_id === String(display.id))
         ?? sources[0];
       replayLog("sources", sources.map((source) => ({
         id: source.id,
@@ -653,6 +757,7 @@ export function stopReplay(): void {
   tellCapture("replay:capture-stop");
   hideDot();
   clearBuffer();
+  releaseCaptureClock();
   releaseCapture();
   dismissReplayToast();
 }
@@ -669,6 +774,11 @@ export function initReplay(dir: string): void {
   if (!registerReplayShortcut(settings.replayAccelerator)) {
     console.error("replay shortcut unavailable", settings.replayAccelerator);
   }
+  const onDisplays = (): void => { void refreshDisplays().then(() => publish()); };
+  screen.on("display-added", onDisplays);
+  screen.on("display-removed", onDisplays);
+  screen.on("display-metrics-changed", onDisplays);
+  void refreshDisplays().then(() => publish());
 
   const takeSegment = async (senderId: number, segment: ReplaySegment): Promise<void> => {
     if (!armed || !isCapture(senderId)) return;
@@ -702,7 +812,7 @@ export function initReplay(dir: string): void {
     encoder = codecLabel(String(info?.codec ?? ""));
     if (getSettings().replaySystemAudio && !info?.audio) notice = "System audio is unavailable. Other selected sources are still recording.";
     else if (getSettings().replayMic && !info.mic) notice = "No microphone was found.";
-    else notice = null;
+    else if (notice !== DEVICE_NOTICE) notice = null;
     publish();
   });
   ipcMain.on("replay:capture-failed", (event, message: unknown) => {
@@ -724,6 +834,12 @@ export function initReplay(dir: string): void {
     return status();
   }));
   ipcMain.handle("replay:save", (_event, requestedAt: unknown) => requestSave(requestedAt));
+  ipcMain.handle("replay:rebind-audio", () => serialize(async () => {
+    if (!armed || saving || !getSettings().replaySystemAudio) return status();
+    notice = DEVICE_NOTICE;
+    await restart();
+    return status();
+  }));
   ipcMain.handle("replay:update", (_event, patch: unknown) => serialize(async () => {
     if (saving) {
       notice = "Wait for the save to finish.";
@@ -737,6 +853,10 @@ export function initReplay(dir: string): void {
     const heightChanged = next.replayHeight !== undefined &&
       replayHeight(next.replayHeight) !== current.replayHeight;
     const micChanged = typeof next.replayMic === "boolean" && next.replayMic !== current.replayMic;
+    const displayId = next.replayDisplayId === undefined
+      ? current.replayDisplayId
+      : replayDisplay(next.replayDisplayId);
+    const displayChanged = displayId !== current.replayDisplayId;
     const audio = {
       replayMicDeviceId: next.replayMicDeviceId === undefined ? current.replayMicDeviceId : replayDevice(next.replayMicDeviceId),
       replayMicGain: next.replayMicGain === undefined ? current.replayMicGain : replayGain(next.replayMicGain),
@@ -757,9 +877,10 @@ export function initReplay(dir: string): void {
       replayFps: fpsChanged ? replayFps(next.replayFps) : current.replayFps,
       replayHeight: heightChanged ? replayHeight(next.replayHeight) : current.replayHeight,
       replayMic: micChanged ? next.replayMic === true : current.replayMic,
+      replayDisplayId: displayId,
     });
     try {
-      if (armed && (fpsChanged || heightChanged || micChanged || audioChanged)) await restart();
+      if (armed && (fpsChanged || heightChanged || micChanged || audioChanged || displayChanged)) await restart();
       else { await prune(); publish(); }
     } catch (error) {
       fail(error instanceof Error ? error.message : "Replay failed.");

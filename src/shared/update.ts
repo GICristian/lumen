@@ -4,12 +4,15 @@ export const idleUpdate: UpdateState = {
   phase: "idle",
   version: null,
   percent: 0,
+  dismissed: false,
   message: null,
 };
 
-/** The banner stays up while a release is waiting, downloading, or failed. */
+/** The notice stays until the user closes an available release. */
 export function updateVisible(state: UpdateState): boolean {
-  return state.phase !== "idle";
+  if (state.phase === "idle") return false;
+  if (state.phase === "available" && state.dismissed) return false;
+  return true;
 }
 
 export function updateTitle(state: UpdateState): string {
