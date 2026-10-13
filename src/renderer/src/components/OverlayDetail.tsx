@@ -30,6 +30,10 @@ type Props = {
   status: string | null;
   favorite?: boolean;
   onFavorite?: () => void;
+  hasPrevious?: boolean;
+  hasNext?: boolean;
+  onPrevious?: () => void;
+  onNext?: () => void;
 };
 
 const unplayable = "This clip can't be played. Download still uses the original file.";
@@ -52,6 +56,10 @@ export function OverlayDetail({
   status,
   favorite = false,
   onFavorite,
+  hasPrevious = false,
+  hasNext = false,
+  onPrevious,
+  onNext,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -349,6 +357,7 @@ export function OverlayDetail({
               trim={trimOn}
               start={trimStart}
               end={trimEnd}
+              previewPath={item.path}
               onSeek={(next) => {
                 if (videoRef.current) videoRef.current.currentTime = next;
                 setTime(next);
@@ -371,6 +380,14 @@ export function OverlayDetail({
             </span>
           </div>
           <div className="detail-row">
+            <div className="clip-step">
+              <button type="button" disabled={!hasPrevious} onClick={onPrevious}>
+                <Icon name="previous" /> Previous
+              </button>
+              <button type="button" disabled={!hasNext} onClick={onNext}>
+                Next <Icon name="next" />
+              </button>
+            </div>
             <button type="button" className="detail-play" aria-label={playing ? "Pause" : "Play"} data-tooltip={playing ? "Pause · Space" : "Play · Space"} disabled={!src} onClick={togglePlay}><PlaybackGlyph playing={playing} /></button>
             <button
               type="button"

@@ -21,6 +21,7 @@ import { deleteVideos, listDirectory, listFolder, videoArg } from "./library";
 import { forgetFavoritePaths, listFavorites, toggleFavoritePath } from "./favorites";
 import { listActivity, recordActivity } from "./activity";
 import { listLumenFolders, lumenReplayRoot } from "./lumenFolders";
+import { closeScreenshot, copyScreenshot, saveScreenshot, screenshotFrame } from "./screenshotHost";
 import {
   applyLaunchOnStartup,
   beginOverlayDrag,
@@ -29,6 +30,7 @@ import {
   isOverlayWindow,
   openOverlay,
   saveOverlayShortcut,
+  saveScreenshotShortcut,
   saveVaultShortcut,
   toggleOverlay,
   withOverlayRelaxed,
@@ -365,6 +367,16 @@ export function registerIpc(
     await saveVaultShortcut(accelerator);
     return getSettings();
   });
+  ipcMain.handle("screenshot:shortcut", async (_event, accelerator: string) => {
+    await saveScreenshotShortcut(accelerator);
+    return getSettings();
+  });
+  ipcMain.handle("screenshot:frame", () => screenshotFrame());
+  ipcMain.handle("screenshot:save", (_event, bytes: Uint8Array) => saveScreenshot(bytes));
+  ipcMain.handle("screenshot:copy", (_event, bytes: Uint8Array) => {
+    copyScreenshot(bytes);
+  });
+  ipcMain.on("screenshot:close", () => closeScreenshot());
   ipcMain.handle("vault:status", () => vaultStatus());
   ipcMain.handle("vault:create", (_event, password: string) => vaultCreate(password));
   ipcMain.handle("vault:unlock", (_event, password: string) => vaultUnlock(password));

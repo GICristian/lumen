@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { VaultItem, VaultStatus } from "@shared/contracts";
 import { BrandMark } from "./BrandMark";
 import { Icon } from "./Icon";
+import { BackButton, WindowControls } from "./WindowChrome";
 
 type Props = {
   onPlay: (item: VaultItem) => void;
@@ -120,21 +121,9 @@ export function VaultPane({ onPlay, onLock, onMinimize, onMaximize, onClose }: P
   return (
     <div className="hub">
       <header className="hub-bar">
-        <button type="button" className="hub-back" onClick={onLock}>
-          Back
-        </button>
+        <BackButton onClick={onLock} />
         <div className="hub-spacer" />
-        <div className="window-controls">
-          <button type="button" className="win-btn" onClick={onMinimize} aria-label="Minimize">
-            –
-          </button>
-          <button type="button" className="win-btn" onClick={onMaximize} aria-label="Maximize">
-            □
-          </button>
-          <button type="button" className="win-btn close" onClick={onClose} aria-label="Close">
-            ×
-          </button>
-        </div>
+        <WindowControls onMinimize={onMinimize} onMaximize={onMaximize} onClose={onClose} />
       </header>
       <div className={library ? "vault-screen is-library" : "vault-screen"}>
         {open ? (

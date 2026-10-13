@@ -1,5 +1,6 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { dragEnd, dragStart } from "@shared/range";
+import { SeekHover, seekLeft } from "./SeekHover";
 
 type Drag = "start" | "end" | "move" | "seek";
 
@@ -12,6 +13,7 @@ type Props = {
   onSeek: (time: number) => void;
   onRange: (start: number, end: number) => void;
   onScrub?: (active: boolean) => void;
+  previewPath?: string | null;
 };
 
 function place(clientX: number, track: HTMLDivElement, duration: number): number {
@@ -30,8 +32,10 @@ export function TrimTrack({
   onSeek,
   onRange,
   onScrub,
+  previewPath = null,
 }: Props) {
   const trackRef = useRef<HTMLDivElement>(null);
+  const [hover, setHover] = useState<number | null>(null);
   const playRatio = duration > 0 ? Math.min(1, Math.max(0, time / duration)) : 0;
   const startRatio = duration > 0 ? start / duration : 0;
   const endRatio = duration > 0 ? end / duration : 1;
@@ -47,12 +51,17 @@ export function TrimTrack({
     const span = Math.max(0.1, originEnd - originStart);
     let moved = false;
     onScrub?.(true);
-    if (kind === "seek") onSeek(place(event.clientX, track, duration));
+    if (kind === "seek") {
+      const at = place(event.clientX, track, duration);
+      setHover(at);
+      onSeek(at);
+    }
 
     const move = (ev: PointerEvent): void => {
       if (Math.abs(ev.clientX - originX) > 2) moved = true;
       const at = place(ev.clientX, track, duration);
       if (kind === "seek") {
+        setHover(at);
         onSeek(at);
         return;
       }
@@ -85,19 +94,38 @@ export function TrimTrack({
     window.addEventListener("pointercancel", up);
   }
 
+  function read(clientX: number, host: HTMLElement): number {
+    const rect = host.getBoundingClientRect();
+    if (rect.width <= 0 || duration <= 0) return 0;
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    return ratio * duration;
+  }
+
+  function popup(): React.ReactNode {
+    if (hover === null || !previewPath || duration <= 0) return null;
+    return <SeekHover path={previewPath} time={hover} left={seekLeft(hover, duration)} />;
+  }
+
   if (!trim) {
     return (
-      <input
-        className="length-slider"
-        type="range"
-        min={0}
-        max={duration || 0}
-        step={0.05}
-        value={Math.min(time, duration || 0)}
-        disabled={duration <= 0}
-        aria-label="Clip position"
-        onChange={(event) => onSeek(Number(event.target.value))}
-      />
+      <div
+        className="seek-line"
+        onPointerMove={(event) => setHover(read(event.clientX, event.currentTarget))}
+        onPointerLeave={() => setHover(null)}
+      >
+        <input
+          className="length-slider"
+          type="range"
+          min={0}
+          max={duration || 0}
+          step={0.05}
+          value={Math.min(time, duration || 0)}
+          disabled={duration <= 0}
+          aria-label="Clip position"
+          onChange={(event) => onSeek(Number(event.target.value))}
+        />
+        {popup()}
+      </div>
     );
   }
 
@@ -106,6 +134,8 @@ export function TrimTrack({
       className="trim-track"
       ref={trackRef}
       onPointerDown={(event) => drag("seek", event)}
+      onPointerMove={(event) => setHover(read(event.clientX, event.currentTarget))}
+      onPointerLeave={() => setHover(null)}
     >
       <div className="trim-rail" />
       <div
@@ -142,6 +172,7 @@ export function TrimTrack({
         onPointerDown={(event) => drag("end", event)}
       />
       <div className="trim-playhead" style={{ left: `${playRatio * 100}%` }} />
+      {popup()}
     </div>
   );
 }

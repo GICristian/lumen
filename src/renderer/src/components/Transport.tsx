@@ -92,11 +92,11 @@ export function Transport(props: Props) {
   return (
     <footer className="transport">
       <div className="transport-playback">
-        <button type="button" className="icon-btn" aria-label="Previous clip" data-tooltip="Previous clip · Ctrl ←" disabled={!props.hasPrevious} onClick={props.onPrevious}><Icon name="previous" /></button>
+        <button type="button" className="clip-nav" aria-label="Previous video" data-tooltip="Previous video · Ctrl ←" disabled={!props.hasPrevious} onClick={props.onPrevious}><Icon name="previous" /><span>Previous</span></button>
         <button type="button" className="play-btn" onClick={props.onTogglePlay} disabled={!props.available} aria-label={props.playing ? "Pause" : "Play"} data-tooltip={props.playing ? "Pause · Space" : "Play · Space"}>
           <PlaybackGlyph playing={props.playing} />
         </button>
-        <button type="button" className="icon-btn" aria-label="Next clip" data-tooltip="Next clip · Ctrl →" disabled={!props.hasNext} onClick={props.onNext}><Icon name="next" /></button>
+        <button type="button" className="clip-nav" aria-label="Next video" data-tooltip="Next video · Ctrl →" disabled={!props.hasNext} onClick={props.onNext}><Icon name="next" /><span>Next</span></button>
       </div>
       <span className="clock">
         <strong>{formatClock(props.current)}</strong>

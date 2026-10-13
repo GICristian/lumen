@@ -1,5 +1,6 @@
 import { BrandMark } from "./BrandMark";
 import { Icon } from "./Icon";
+import { WindowControls } from "./WindowChrome";
 
 type Props = {
   fileLabel: string;
@@ -26,17 +27,7 @@ export function TitleBar({ fileLabel, onHome, onEdit, editing, canEdit, onMinimi
       <button type="button" className="text-btn hub-link" onClick={onHome}>
         Hub
       </button>
-      <div className="window-controls">
-        <button type="button" className="win-btn" onClick={onMinimize} aria-label="Minimize">
-          –
-        </button>
-        <button type="button" className="win-btn" onClick={onMaximize} aria-label="Maximize">
-          □
-        </button>
-        <button type="button" className="win-btn close" onClick={onClose} aria-label="Close">
-          ×
-        </button>
-      </div>
+      <WindowControls onMinimize={onMinimize} onMaximize={onMaximize} onClose={onClose} />
     </header>
   );
 }

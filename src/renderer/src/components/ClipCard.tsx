@@ -3,6 +3,7 @@ import type { FolderItem } from "@shared/contracts";
 import { clipTitle, formatBytes, formatWhen } from "@shared/clips";
 import { POSTER_FAIL, posterImage } from "../player/usePosters";
 import { EditMenu } from "./EditMenu";
+import { HoverScrub } from "./HoverScrub";
 import { Icon } from "./Icon";
 
 type CardProps = {
@@ -98,7 +99,9 @@ export function ClipCard({
       />
       <div className="clip-frame">
         <span className="clip-ratio" />
-        <Poster poster={poster} />
+        <HoverScrub path={item.path}>
+          <Poster poster={poster} />
+        </HoverScrub>
         {onFavorite ? (
           <button
             type="button"
@@ -161,12 +164,13 @@ export function SideClip({
   favorite = false,
   onFavorite,
 }: SideProps) {
-  const ref = useSeen<HTMLButtonElement>(onVisible, item.path);
+  const ref = useSeen<HTMLDivElement>(onVisible, item.path);
 
   return (
-    <button
+    <div
       ref={ref}
-      type="button"
+      role="button"
+      tabIndex={0}
       style={{ "--side-thumb-size": `${thumbSize}px` } as CSSProperties}
       className={[
         "side-clip",
@@ -174,6 +178,13 @@ export function SideClip({
         active ? "is-on" : "",
         favorite ? "is-favorite" : "",
       ].filter(Boolean).join(" ")}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen(item.path);
+        }
+      }}
       onClick={(event) => {
         if (event.shiftKey || event.ctrlKey || event.metaKey) {
           onSelect(item.path, event.shiftKey);
@@ -194,7 +205,9 @@ export function SideClip({
         onChange={() => undefined}
       />
       <span className={favorite ? "side-thumb is-favorite" : "side-thumb"}>
-        <Poster poster={poster} />
+        <HoverScrub path={item.path}>
+          <Poster poster={poster} />
+        </HoverScrub>
         {onFavorite ? (
           <span
             role="button"
@@ -217,10 +230,10 @@ export function SideClip({
           </span>
         ) : null}
       </span>
-      <span className="side-name" title={item.name}>
-        {clipTitle(item.name)}
+      <span className="side-copy">
+        <span className="side-name" title={item.name}>{clipTitle(item.name)}</span>
         <span className="side-meta">{formatWhen(item.mtimeMs)} · {formatBytes(item.sizeBytes)}</span>
       </span>
-    </button>
+    </div>
   );
 }

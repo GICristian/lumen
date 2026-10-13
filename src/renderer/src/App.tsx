@@ -10,6 +10,7 @@ import { setMark, type Marks } from "@shared/range";
 import { applySeek } from "@shared/seek";
 import { clampVolume, stepVolume } from "@shared/volume";
 import { cueAt, defaultCueStyle, parseVtt, type Cue, type CueStyle } from "@shared/cues";
+import { presetDraft, resolveTheme, type SavedTheme, type ThemeDraft } from "@shared/theme";
 import { DeleteClips } from "./components/DeleteClips";
 import { Hub } from "./components/Hub";
 import { VaultPane } from "./components/VaultPane";
@@ -25,7 +26,6 @@ import { fileName, formatClock, seekLabel, useChromeFade, useOsd } from "./playe
 import { usePosters } from "./player/usePosters";
 import { useClipSelection } from "./player/useSelection";
 import { useIdleCursor } from "./player/useIdleCursor";
-import { lumenCursor } from "./player/cursor";
 import { pausePlayback, resumePlayback } from "./player/resumePlayback";
 
 const unplayable = "This clip can't be played. You can still export it if ffmpeg can read it.";
@@ -81,6 +81,10 @@ export function App() {
   const noticeTimer = useRef<number | null>(null);
   const [overlayShortcut, setOverlayShortcut] = useState("Ctrl+Alt+L");
   const [vaultShortcut, setVaultShortcut] = useState("Ctrl+Alt+Shift+V");
+  const [screenshotShortcut, setScreenshotShortcut] = useState("Ctrl+Shift+S");
+  const [theme, setTheme] = useState<ThemeDraft>(presetDraft("gold"));
+  const [savedThemes, setSavedThemes] = useState<SavedTheme[]>([]);
+  const [activeSavedId, setActiveSavedId] = useState<string | null>(null);
   const [launchOnStartup, setLaunchOnStartup] = useState(false);
   const [cursorSize, setCursorSize] = useState(24);
   const [exportDirectory, setExportDirectory] = useState<string | null>(null);
@@ -619,6 +623,18 @@ export function App() {
       setFolderOpen(settings.libraryPinned);
       setOverlayShortcut(settings.overlayAccelerator);
       setVaultShortcut(settings.vaultAccelerator);
+      setScreenshotShortcut(settings.screenshotAccelerator);
+      setTheme({
+        themeId: settings.themeId,
+        themeMode: settings.themeMode,
+        themeMotif: settings.themeMotif,
+        themeBackground: settings.themeBackground,
+        themeSurface: settings.themeSurface,
+        themeAccent: settings.themeAccent,
+        themeAccent2: settings.themeAccent2,
+      });
+      setSavedThemes(settings.savedThemes);
+      setActiveSavedId(settings.activeSavedId);
       setLaunchOnStartup(settings.launchOnStartup);
       setCursorSize(settings.cursorSize);
       setExportDirectory(settings.exportDirectory);
@@ -652,6 +668,14 @@ export function App() {
       setToast({ text: fileName(payload.outputPath), path: payload.outputPath });
     });
     const offHome = window.lumen.onShowHome(() => homeFn.current());
+    const offSettings = window.lumen.onSettingsOpen((page) => {
+      videoRef.current && pausePlayback(videoRef.current);
+      setPlaying(false);
+      setEditorOpen(false);
+      setHome(true);
+      setHubPage(page);
+      window.lumen.setTitle("Lumen — Settings");
+    });
     const offStudio = window.lumen.onStudioOpen((filePath) => {
       videoRef.current && pausePlayback(videoRef.current);
       setPlaying(false);
@@ -690,6 +714,7 @@ export function App() {
       offError();
       offVault();
       offHome();
+      offSettings();
       offStudio();
     };
   }, []);
@@ -825,10 +850,7 @@ export function App() {
   return (
     <div
       className={shellClass}
-      style={{
-        "--cursor-size": `${cursorSize}px`,
-        "--lumen-cursor": lumenCursor(cursorSize),
-      } as CSSProperties}
+      style={{ "--cursor-size": `${cursorSize}px` } as CSSProperties}
       onDragEnter={onDragEnter}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
@@ -852,6 +874,90 @@ export function App() {
           page={hubPage === "settings" || hubPage === "replay" ? hubPage : "home"}
           shortcut={overlayShortcut}
           vaultShortcut={vaultShortcut}
+          screenshotShortcut={screenshotShortcut}
+          theme={theme}
+          savedThemes={savedThemes}
+          activeSavedId={activeSavedId}
+          onTheme={async (draft) => {
+            const settings = await window.lumen.setSettings({ ...draft, activeSavedId: null });
+            setTheme({
+              themeId: settings.themeId,
+              themeMode: settings.themeMode,
+              themeMotif: settings.themeMotif,
+              themeBackground: settings.themeBackground,
+              themeSurface: settings.themeSurface,
+              themeAccent: settings.themeAccent,
+              themeAccent2: settings.themeAccent2,
+            });
+            setSavedThemes(settings.savedThemes);
+            setActiveSavedId(settings.activeSavedId);
+          }}
+          onSaveTheme={async (name) => {
+            const look = resolveTheme(theme);
+            const entry: SavedTheme = {
+              id: Date.now().toString(36),
+              name,
+              themeMode: look.mode,
+              themeMotif: look.motif,
+              themeBackground: look.background,
+              themeSurface: look.surface,
+              themeAccent: look.accent,
+              themeAccent2: look.accent2,
+            };
+            const settings = await window.lumen.setSettings({
+              savedThemes: [...savedThemes, entry].slice(-12),
+              activeSavedId: entry.id,
+              themeId: "custom",
+              themeMode: look.mode,
+              themeMotif: look.motif,
+              themeBackground: look.background,
+              themeSurface: look.surface,
+              themeAccent: look.accent,
+              themeAccent2: look.accent2,
+            });
+            setTheme({
+              themeId: settings.themeId,
+              themeMode: settings.themeMode,
+              themeMotif: settings.themeMotif,
+              themeBackground: settings.themeBackground,
+              themeSurface: settings.themeSurface,
+              themeAccent: settings.themeAccent,
+              themeAccent2: settings.themeAccent2,
+            });
+            setSavedThemes(settings.savedThemes);
+            setActiveSavedId(settings.activeSavedId);
+          }}
+          onApplySaved={async (saved) => {
+            const settings = await window.lumen.setSettings({
+              themeId: "custom",
+              themeMode: saved.themeMode,
+              themeMotif: saved.themeMotif,
+              themeBackground: saved.themeBackground,
+              themeSurface: saved.themeSurface,
+              themeAccent: saved.themeAccent,
+              themeAccent2: saved.themeAccent2,
+              activeSavedId: saved.id,
+            });
+            setTheme({
+              themeId: settings.themeId,
+              themeMode: settings.themeMode,
+              themeMotif: settings.themeMotif,
+              themeBackground: settings.themeBackground,
+              themeSurface: settings.themeSurface,
+              themeAccent: settings.themeAccent,
+              themeAccent2: settings.themeAccent2,
+            });
+            setSavedThemes(settings.savedThemes);
+            setActiveSavedId(settings.activeSavedId);
+          }}
+          onDeleteSaved={async (id) => {
+            const settings = await window.lumen.setSettings({
+              savedThemes: savedThemes.filter((item) => item.id !== id),
+              activeSavedId: activeSavedId === id ? null : activeSavedId,
+            });
+            setSavedThemes(settings.savedThemes);
+            setActiveSavedId(settings.activeSavedId);
+          }}
           launchOnStartup={launchOnStartup}
           cursorSize={cursorSize}
           onCursorSize={(size) => {
@@ -888,12 +994,14 @@ export function App() {
           onOpenVault={() => setHubPage("vault")}
           onBack={() => setHubPage("home")}
           onShortcut={async (which, accelerator) => {
-            const settings =
-              which === "overlay"
-                ? await window.lumen.setOverlayShortcut(accelerator)
-                : await window.lumen.setVaultShortcut(accelerator);
+            const settings = which === "overlay"
+              ? await window.lumen.setOverlayShortcut(accelerator)
+              : which === "vault"
+                ? await window.lumen.setVaultShortcut(accelerator)
+                : await window.lumen.setScreenshotShortcut(accelerator);
             setOverlayShortcut(settings.overlayAccelerator);
             setVaultShortcut(settings.vaultAccelerator);
+            setScreenshotShortcut(settings.screenshotAccelerator);
           }}
           onLaunch={async (enabled) => {
             const settings = await window.lumen.setLaunchOnStartup(enabled);

@@ -1,6 +1,6 @@
 type Name = "play" | "pause" | "folder" | "gear" | "full" | "volume" | "close" | "search" | "back" | "lock" | "edit" | "record" | "star" | "bell";
 
-type ExtendedName = Name | "previous" | "next" | "loop";
+type ExtendedName = Name | "previous" | "next" | "loop" | "screen" | "replay" | "sliders";
 const paths: Record<ExtendedName, string> = {
   previous: "M6 5v14M18 5l-9 7 9 7V5Z",
   next: "M18 5v14M6 5l9 7-9 7V5Z",
@@ -32,6 +32,9 @@ const paths: Record<ExtendedName, string> = {
   record: "M12 5a7 7 0 1 0 0 14 7 7 0 0 0 0-14Z",
   star: "M12 3.2 14.7 8.7 20.8 9.6 16.4 13.9 17.4 20 12 17.1 6.6 20 7.6 13.9 3.2 9.6 9.3 8.7 12 3.2Z",
   bell: "M6 9a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9M10 21a2 2 0 0 0 4 0",
+  screen: "M5 6.5h14v9H5v-9ZM8 18.5h8",
+  replay: "M12 7a5 5 0 1 0 4.6 3M12 7V4l2.6 2.6",
+  sliders: "M5 8h14M5 16h14M8 6v4M16 14v4",
 };
 
 export function Icon({ name }: { name: ExtendedName }) {

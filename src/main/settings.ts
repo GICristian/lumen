@@ -3,7 +3,8 @@ import path from "node:path";
 import type { Settings } from "@shared/contracts";
 import { defaultCueStyle, normalizeCueStyle } from "@shared/cues";
 import { rememberFolder } from "@shared/folders";
-import { overlayAccelerator, replayAccelerator, vaultAccelerator } from "@shared/shortcut";
+import { overlayAccelerator, replayAccelerator, screenshotAccelerator, vaultAccelerator } from "@shared/shortcut";
+import { normalizeSavedThemes, normalizeTheme, presetDraft } from "@shared/theme";
 import { replayBuffer, replayFps, replayHeight, replayGain, replayBitrate, replayDevice, replayDisplay } from "@shared/replay";
 import { clampVolume } from "@shared/volume";
 
@@ -41,6 +42,11 @@ export const defaultSettings: Settings = {
   replayAccelerator: "Ctrl+Alt+Shift+R",
   replayDirectory: null,
   replayDisplayId: "",
+  screenshotAccelerator: "Ctrl+Shift+S",
+  ...presetDraft("gold"),
+  savedThemes: [],
+  activeSavedId: null,
+  previewAudio: false,
 };
 
 function overlayBoundsOk(value: unknown): value is NonNullable<Settings["overlayBounds"]> {
@@ -109,6 +115,34 @@ export function normalizeSettings(raw: Partial<Settings> | null): Settings {
       ? raw.replayDirectory
       : null,
     replayDisplayId: replayDisplay(raw?.replayDisplayId),
+    screenshotAccelerator: screenshotAccelerator(raw?.screenshotAccelerator),
+    ...themeBundle(raw),
+  };
+}
+
+function themeBundle(raw: Partial<Settings> | null): Pick<
+  Settings,
+  | "themeId"
+  | "themeMode"
+  | "themeMotif"
+  | "themeBackground"
+  | "themeSurface"
+  | "themeAccent"
+  | "themeAccent2"
+  | "savedThemes"
+  | "activeSavedId"
+  | "previewAudio"
+> {
+  const theme = normalizeTheme(raw);
+  const savedThemes = normalizeSavedThemes(raw?.savedThemes);
+  const requested = typeof raw?.activeSavedId === "string" ? raw.activeSavedId : null;
+  const known = savedThemes.some((item) => item.id === requested);
+  const activeSavedId = theme.themeId === "custom" && known ? requested : null;
+  return {
+    ...theme,
+    savedThemes,
+    activeSavedId,
+    previewAudio: raw?.previewAudio === true,
   };
 }
 
@@ -139,6 +173,12 @@ export function getSettings(): Settings {
   return current;
 }
 
+let onSettings = (_settings: Settings): void => undefined;
+
+export function watchSettings(listener: (settings: Settings) => void): void {
+  onSettings = listener;
+}
+
 export async function patchSettings(patch: Partial<Settings>): Promise<Settings> {
   current = normalizeSettings({ ...current, ...patch });
   try {
@@ -147,5 +187,6 @@ export async function patchSettings(patch: Partial<Settings>): Promise<Settings>
     console.error("settings write failed", settingsFile, error);
     throw error;
   }
+  onSettings(current);
   return current;
 }

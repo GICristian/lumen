@@ -8,6 +8,7 @@ const overlay = window.location.hash.startsWith("#/overlay");
 const replayToast = window.location.hash.startsWith("#/replay-toast");
 const replayCapture = window.location.hash.startsWith("#/replay-capture");
 const replayPill = window.location.hash.startsWith("#/replay-pill");
+const screenshot = window.location.hash.startsWith("#/screenshot");
 if (overlay) document.documentElement.classList.add("is-overlay");
 if (replayPill) document.documentElement.classList.add("is-replay-pill");
 
@@ -16,10 +17,18 @@ async function boot(): Promise<void> {
   if (!replayCapture) {
     await Promise.all([import('@fontsource/outfit/400.css'), import('@fontsource/outfit/500.css'), import('@fontsource/outfit/600.css'), import('./styles.css')]);
     await import('./studio.css');
+    await import('./experience.css');
+    const { applyTheme } = await import('./player/applyTheme');
+    const { bindPreviewAudio } = await import('./player/previewAudio');
+    const settings = await window.lumen.getSettings();
+    applyTheme(settings);
+    bindPreviewAudio();
+    window.lumen.onTheme(applyTheme);
   }
   const Component = replayCapture ? (await import('./components/ReplayCapture')).ReplayCapture
     : replayPill ? (await import('./components/ReplayPill')).ReplayPill
       : replayToast ? (await import('./components/ReplayToast')).ReplayToast
+        : screenshot ? (await import('./components/ScreenshotSelect')).ScreenshotSelect
         : overlay ? (await import('./components/Overlay')).OverlayApp : (await import('./App')).App;
   createRoot(root!).render(<StrictMode><Component /></StrictMode>);
 }

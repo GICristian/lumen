@@ -42,6 +42,51 @@ export function sequenceDuration(clips: readonly SequenceClip[]): number {
   return clips.reduce((total, clip) => total + Math.max(0.01, clip.end - clip.start), 0);
 }
 
+type Timed = { start: number; end: number };
+
+export function clipSpan(clip: Timed): number {
+  return Math.max(0, clip.end - clip.start);
+}
+
+/** Where a timeline time falls inside the joined clips. */
+export function locateTime<T extends Timed>(
+  clips: readonly T[],
+  at: number,
+): { index: number; into: number } | null {
+  if (clips.length === 0) return null;
+  let cursor = 0;
+  for (let index = 0; index < clips.length; index += 1) {
+    const length = clipSpan(clips[index]);
+    const last = index === clips.length - 1;
+    if (at <= cursor + length || last) {
+      return { index, into: Math.min(length, Math.max(0, at - cursor)) };
+    }
+    cursor += length;
+  }
+  return null;
+}
+
+/** Cuts the clip under `at` when both sides keep at least a twentieth of a second. */
+export function splitClip<T extends Timed>(
+  clips: readonly T[],
+  at: number,
+  fork: (clip: T) => T,
+): T[] {
+  const place = locateTime(clips, at);
+  if (!place) return [...clips];
+  const clip = clips[place.index];
+  const length = clipSpan(clip);
+  if (place.into < 0.05 || length - place.into < 0.05) return [...clips];
+  const left = { ...clip, end: clip.start + place.into };
+  const right = fork({ ...clip, start: clip.start + place.into });
+  return [
+    ...clips.slice(0, place.index),
+    left,
+    right,
+    ...clips.slice(place.index + 1),
+  ];
+}
+
 /** One encode that trims, crops, sets volume, and joins every clip on the line. */
 export function buildSequenceArgs(clips: readonly SequenceClip[], output: string): string[] {
   if (clips.length === 0) throw new Error("Add a clip to the timeline");

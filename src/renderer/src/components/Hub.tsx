@@ -1,8 +1,11 @@
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import type { SavedTheme, ThemeDraft } from "@shared/theme";
 import { ActivityBell } from "./ActivityBell";
 import { BrandLockup, BrandMark } from "./BrandMark";
 import { HubSettings } from "./HubSettings";
 import { Icon } from "./Icon";
 import { ReplayPanel } from "./ReplayPanel";
+import { BackButton, WindowControls } from "./WindowChrome";
 
 type Props = {
   page: "home" | "settings" | "replay";
@@ -24,7 +27,15 @@ type Props = {
   onOpenReplay: () => void;
   onOpenVault: () => void;
   onBack: () => void;
-  onShortcut: (which: "overlay" | "vault", accelerator: string) => Promise<void>;
+  screenshotShortcut: string;
+  theme: ThemeDraft;
+  savedThemes: SavedTheme[];
+  activeSavedId: string | null;
+  onTheme: (draft: ThemeDraft) => Promise<void>;
+  onSaveTheme: (name: string) => Promise<void>;
+  onApplySaved: (theme: SavedTheme) => Promise<void>;
+  onDeleteSaved: (id: string) => Promise<void>;
+  onShortcut: (which: "overlay" | "vault" | "screenshot", accelerator: string) => Promise<void>;
   onLaunch: (enabled: boolean) => Promise<void>;
   onMinimize: () => void;
   onMaximize: () => void;
@@ -35,6 +46,14 @@ export function Hub({
   page,
   shortcut,
   vaultShortcut,
+  screenshotShortcut,
+  theme,
+  savedThemes,
+  activeSavedId,
+  onTheme,
+  onSaveTheme,
+  onApplySaved,
+  onDeleteSaved,
   launchOnStartup,
   cursorSize,
   onCursorSize,
@@ -57,6 +76,56 @@ export function Hub({
   onMaximize,
   onClose,
 }: Props) {
+  const wheelLock = useRef(0);
+  const wheelBox = useRef<HTMLDivElement>(null);
+  const [wheel, setWheel] = useState(0);
+  const actions: {
+    title: string;
+    detail: string;
+    icon: "folder" | "screen" | "replay" | "edit" | "lock" | "sliders";
+    onClick: () => void;
+  }[] = [
+    {
+      title: folderName ?? "Library",
+      detail: folderName ? "Open the clips in this folder" : "Choose a folder of clips",
+      icon: "folder",
+      onClick: onOpenLibrary,
+    },
+    {
+      title: "Overlay",
+      detail: `Float the library over the desktop · ${shortcut}`,
+      icon: "screen",
+      onClick: onOverlay,
+    },
+    {
+      title: "Replay",
+      detail: "Keep the last few minutes",
+      icon: "replay",
+      onClick: onOpenReplay,
+    },
+    {
+      title: "Editor",
+      detail: "Split, trim and export",
+      icon: "edit",
+      onClick: onOpenEditor,
+    },
+    {
+      title: "Vault",
+      detail: "Clips behind a password",
+      icon: "lock",
+      onClick: onOpenVault,
+    },
+    {
+      title: "Settings",
+      detail: "Theme, shortcuts and cursor",
+      icon: "sliders",
+      onClick: onOpenSettings,
+    },
+  ];
+  useEffect(() => {
+    wheelBox.current?.querySelector<HTMLElement>(".is-focus")?.scrollIntoView({ block: "nearest" });
+  }, [wheel]);
+
   return (
     <div className={dropping ? "hub is-drop" : "hub"} onPointerMove={(event) => {
       if (event.pointerType !== "mouse") return;
@@ -73,9 +142,7 @@ export function Hub({
             <span className="hub-word">Lumen</span>
           </>
         ) : (
-          <button type="button" className="hub-back" onClick={onBack}>
-            Back
-          </button>
+          <BackButton onClick={onBack} />
         )}
         <div className="hub-spacer" />
         {page === "home" ? (
@@ -87,22 +154,20 @@ export function Hub({
             </button>
           </>
         ) : null}
-        <div className="window-controls">
-          <button type="button" className="win-btn" onClick={onMinimize} aria-label="Minimize">
-            –
-          </button>
-          <button type="button" className="win-btn" onClick={onMaximize} aria-label="Maximize">
-            □
-          </button>
-          <button type="button" className="win-btn close" onClick={onClose} aria-label="Close">
-            ×
-          </button>
-        </div>
+        <WindowControls onMinimize={onMinimize} onMaximize={onMaximize} onClose={onClose} />
       </header>
       {page === "settings" ? (
         <HubSettings
           overlayShortcut={shortcut}
           vaultShortcut={vaultShortcut}
+          screenshotShortcut={screenshotShortcut}
+          theme={theme}
+          savedThemes={savedThemes}
+          activeSavedId={activeSavedId}
+          onTheme={onTheme}
+          onSaveTheme={onSaveTheme}
+          onApplySaved={onApplySaved}
+          onDeleteSaved={onDeleteSaved}
           launchOnStartup={launchOnStartup}
           cursorSize={cursorSize}
           onCursorSize={onCursorSize}
@@ -110,6 +175,7 @@ export function Hub({
           onExportDirectory={onExportDirectory}
           onShortcut={onShortcut}
           onLaunch={onLaunch}
+          onReplay={onOpenReplay}
         />
       ) : page === "replay" ? (
         <ReplayPanel />
@@ -135,71 +201,38 @@ export function Hub({
               <p>Open a file, or drop it anywhere on this window.</p>
             </div>
           </button>
-          <div className="hub-side">
-            <button
-              type="button"
-              className="hub-card hub-tile hub-library"
-              onClick={onOpenLibrary}
-            >
-              <span className="hub-glyph">
-                <Icon name="folder" />
-              </span>
-              <span className="hub-copy">
-                <span className="hub-kicker">Library</span>
-                <strong>{folderName ?? "Open a folder"}</strong>
-                <p>{folderName ? "Clips from the last folder." : "Browse the clips on disk."}</p>
-              </span>
-            </button>
-            <button type="button" className="hub-card hub-tile hub-overlay" onClick={onOverlay}>
-              <span className="hub-glyph">
-                <BrandMark className="brand-mark-svg" />
-              </span>
-              <span className="hub-copy">
-                <span className="hub-kicker">Overlay</span>
-                <strong>Over the desktop</strong>
-                <p>{shortcut}</p>
-              </span>
-            </button>
-            <button type="button" className="hub-card hub-tile hub-replay" onClick={onOpenReplay}>
-              <span className="hub-glyph">
-                <Icon name="record" />
-              </span>
-              <span className="hub-copy">
-                <span className="hub-kicker">Capture</span>
-                <strong>Replay</strong>
-                <p>Screen, sound and mic.</p>
-              </span>
-            </button>
-            <button
-              type="button"
-              className="hub-card hub-tile hub-settings"
-              onClick={onOpenSettings}
-            >
-              <span className="hub-glyph">
-                <Icon name="gear" />
-              </span>
-              <span className="hub-copy">
-                <span className="hub-kicker">Settings</span>
-                <strong>Make it yours</strong>
-                <p>Appearance, cursor and shortcuts.</p>
-              </span>
-            </button>
-            <button type="button" className="hub-card hub-tile hub-editor" onClick={onOpenEditor}>
-              <span className="hub-glyph"><Icon name="edit" /></span>
-              <span className="hub-copy">
-                <span className="hub-kicker">Studio</span>
-                <strong>Open editor</strong>
-                <p>Timeline, media and export.</p>
-              </span>
-            </button>
-            <button type="button" className="hub-card hub-tile hub-vault" onClick={onOpenVault}>
-              <span className="hub-glyph"><Icon name="lock" /></span>
-              <span className="hub-copy">
-                <span className="hub-kicker">Private</span>
-                <strong>Vault</strong>
-                <p>Password protected, always.</p>
-              </span>
-            </button>
+          <div
+            className="hub-side hub-wheel"
+            ref={wheelBox}
+            onWheel={(event) => {
+              event.preventDefault();
+              const now = performance.now();
+              if (now - wheelLock.current < 160) return;
+              wheelLock.current = now;
+              const step = event.deltaY > 0 ? 1 : -1;
+              setWheel((value) => Math.min(actions.length - 1, Math.max(0, value + step)));
+            }}
+          >
+            {actions.map((action, index) => {
+              const distance = Math.min(3, Math.abs(index - wheel));
+              return (
+                <button
+                  key={action.title}
+                  type="button"
+                  className={index === wheel ? "hub-card hub-tile is-focus" : "hub-card hub-tile"}
+                  style={{ "--wheel-distance": distance } as CSSProperties}
+                  onMouseEnter={() => setWheel(index)}
+                  onFocus={() => setWheel(index)}
+                  onClick={action.onClick}
+                >
+                  <span className="hub-glyph"><Icon name={action.icon} /></span>
+                  <span className="hub-copy">
+                    <strong>{action.title}</strong>
+                    <p>{action.detail}</p>
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
         <footer className="hub-footer"><span><i /> LOCAL FILES. FULL FOCUS.</span><span>Drop a video anywhere to begin <span aria-hidden="true">↗</span></span></footer>

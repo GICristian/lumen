@@ -32,6 +32,5 @@ export function showReplayToast(finished = false): void {
     if (dev) void win.loadURL(`${dev}#/replay-toast`);
     else void win.loadFile(path.join(__dirname, "../renderer/index.html"), { hash: "/replay-toast" });
   }
-  // Completed feedback stays long enough to read and act on; never takes keyboard focus.
-  if (finished) dismissTimer = setTimeout(dismissReplayToast, 15000);
+  if (finished) dismissTimer = setTimeout(dismissReplayToast, 3000);
 }

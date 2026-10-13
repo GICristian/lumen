@@ -2,6 +2,7 @@ import type { VideoRect } from "./crop";
 import type { SequenceClip } from "./sequence";
 import type { CueStyle } from "./cues";
 import type { Probe } from "./probe";
+import type { Motif, SavedTheme, ThemeId, ThemeMode } from "./theme";
 
 export type Settings = {
   volume: number;
@@ -38,6 +39,17 @@ export type Settings = {
   replayDirectory: string | null;
   /** Desktop-capturer id such as `screen:0:0`. Empty follows the cursor. */
   replayDisplayId: string;
+  screenshotAccelerator: string;
+  themeId: ThemeId;
+  themeMode: ThemeMode;
+  themeMotif: Motif;
+  themeBackground: string;
+  themeSurface: string;
+  themeAccent: string;
+  themeAccent2: string;
+  savedThemes: SavedTheme[];
+  activeSavedId: string | null;
+  previewAudio: boolean;
 };
 
 export type ReplayScreen = {
@@ -233,6 +245,15 @@ export type LumenApi = {
   dragOverlay: () => void;
   setOverlayShortcut: (accelerator: string) => Promise<Settings>;
   setVaultShortcut: (accelerator: string) => Promise<Settings>;
+  setScreenshotShortcut: (accelerator: string) => Promise<Settings>;
+  screenshotFrame: () => Promise<string>;
+  saveScreenshot: (bytes: Uint8Array) => Promise<string>;
+  copyScreenshot: (bytes: Uint8Array) => Promise<void>;
+  closeScreenshot: () => void;
+  onScreenshotReady: (cb: (frame: string) => void) => () => void;
+  onScreenshotReset: (cb: () => void) => () => void;
+  onScreenshotCommand: (cb: (kind: "copy" | "save" | "undo") => void) => () => void;
+  onTheme: (cb: (settings: Settings) => void) => () => void;
   setLaunchOnStartup: (enabled: boolean) => Promise<Settings>;
   vaultStatus: () => Promise<VaultStatus>;
   vaultCreate: (password: string) => Promise<VaultItem[]>;
@@ -257,6 +278,8 @@ export type LumenApi = {
   startExport: (request: ExportRequest) => Promise<{ jobId: string }>;
   startSequence: (clips: SequenceClip[]) => Promise<{ jobId: string }>;
   openStudio: (filePath: string) => Promise<void>;
+  openSettings: (page?: "settings" | "replay") => Promise<void>;
+  onSettingsOpen: (cb: (page: "settings" | "replay") => void) => () => void;
   cancelExport: (jobId: string) => Promise<void>;
   setTitle: (title: string) => void;
   onExportProgress: (cb: (payload: ExportProgress) => void) => () => void;

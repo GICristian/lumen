@@ -1,11 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FolderItem, LumenFolder } from "@shared/contracts";
 import { containedVideoBox, defaultCrop, type ScreenBox } from "@shared/crop";
-import type { SequenceClip } from "@shared/sequence";
+import { clipSpan, locateTime, splitClip, type SequenceClip } from "@shared/sequence";
 import { clipTitle } from "@shared/clips";
 import { formatClock, mediaUrl } from "../player/usePlayback";
+import { posterImage, usePosters } from "../player/usePosters";
 import { CropOverlay } from "./CropOverlay";
+import { Filmstrip } from "./Filmstrip";
 import { Icon } from "./Icon";
+import { PlaybackGlyph } from "./PlaybackGlyph";
+import { Poster } from "./ClipCard";
+import { BackButton, WindowControls } from "./WindowChrome";
 import { TrimTrack } from "./TrimTrack";
 import { VolumeControl } from "./VolumeControl";
 
@@ -16,6 +21,18 @@ type BoardClip = SequenceClip & { id: string; name: string; duration: number };
 function fileName(filePath: string): string {
   const parts = filePath.split(/[\\/]/);
   return parts[parts.length - 1] || filePath;
+}
+
+function rulerStep(zoom: number): number {
+  const raw = 80 / Math.max(zoom, 1);
+  const steps = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+  return steps.find((step) => step >= raw) ?? 600;
+}
+
+function rulerLabel(seconds: number, step: number): string {
+  if (step >= 1) return formatClock(seconds);
+  const tenths = Math.round(seconds * 10) / 10;
+  return `${formatClock(Math.floor(tenths))}.${Math.round((tenths % 1) * 10)}`;
 }
 
 export function StudioBoard({
@@ -40,8 +57,39 @@ export function StudioBoard({
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
+  const [zoom, setZoom] = useState(48);
+  const [cursor, setCursor] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [viewport, setViewport] = useState({ left: 0, width: 800 });
   const jobId = useRef<string | null>(null);
+  const seekTo = useRef<number | null>(null);
+  const resumePlay = useRef(false);
+  const lineRef = useRef<HTMLDivElement>(null);
+  const zoomAnchor = useRef<{ time: number; offset: number } | null>(null);
+  const press = useRef<{ x: number; y: number; time: number } | null>(null);
+  const scrubbing = useRef(false);
+  const toggleRef = useRef<() => void>(() => {});
   const selected = clips.find((clip) => clip.id === selectedId) ?? null;
+  const posterItems = useMemo(() => {
+    const byPath = new Map<string, FolderItem>();
+    for (const item of media) byPath.set(item.path, item);
+    for (const clip of clips) {
+      if (!byPath.has(clip.path)) {
+        byPath.set(clip.path, { path: clip.path, name: clip.name, mtimeMs: 0, sizeBytes: 0 });
+      }
+    }
+    return [...byPath.values()];
+  }, [media, clips]);
+  const { posters } = usePosters(posterItems);
+  const total = clips.reduce((sum, clip) => sum + clipSpan(clip), 0);
+  const step = rulerStep(zoom);
+  const rulerMarks = useMemo(() => {
+    const marks: number[] = [];
+    for (let mark = 0; mark <= total + 0.001; mark += step) {
+      marks.push(Math.round(mark * 1000) / 1000);
+    }
+    return marks;
+  }, [total, step]);
 
   useEffect(() => {
     void window.lumen.lumenFolders().then(setFolders).catch(() => setFolders([]));
@@ -89,16 +137,95 @@ export function StudioBoard({
   }, [seed]);
 
   useEffect(() => {
+    const node = lineRef.current;
+    if (!node) return;
+    const zoomWheel = (event: WheelEvent): void => {
+      event.preventDefault();
+      const box = node.getBoundingClientRect();
+      const offset = event.clientX - box.left;
+      const time = (offset + node.scrollLeft) / zoom;
+      zoomAnchor.current = { time, offset };
+      const factor = event.deltaY > 0 ? 1 / 1.15 : 1.15;
+      setZoom((value) => Math.min(480, Math.max(8, value * factor)));
+    };
+    const read = (): void => setViewport({ left: node.scrollLeft, width: node.clientWidth });
+    read();
+    node.addEventListener("wheel", zoomWheel, { passive: false });
+    node.addEventListener("scroll", read, { passive: true });
+    const observer = new ResizeObserver(read);
+    observer.observe(node);
+    return () => {
+      node.removeEventListener("wheel", zoomWheel);
+      node.removeEventListener("scroll", read);
+      observer.disconnect();
+    };
+  }, [zoom, clips.length]);
+
+  useLayoutEffect(() => {
+    const anchor = zoomAnchor.current;
+    const node = lineRef.current;
+    if (!anchor || !node) return;
+    node.scrollLeft = Math.max(0, anchor.time * zoom - anchor.offset);
+    zoomAnchor.current = null;
+  }, [zoom]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      const target = event.target;
+      if (target instanceof HTMLElement && target.closest("input, textarea, select")) return;
+      if (event.code === "Space") {
+        event.preventDefault();
+        toggleRef.current();
+        return;
+      }
+      if (event.key !== "Delete" && event.key !== "Backspace") return;
+      if (!selectedId) return;
+      event.preventDefault();
+      setClips((current) => current.filter((clip) => clip.id !== selectedId));
+      setSelectedId(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedId]);
+
+  useEffect(() => {
     const video = videoRef.current;
     if (!video || !selected) return;
     const tick = (): void => {
       const end = selected.end;
-      if (video.currentTime >= end - 0.04) video.currentTime = selected.start;
+      let at = 0;
+      for (const clip of clips) {
+        if (clip.id === selected.id) break;
+        at += clipSpan(clip);
+      }
+      if (video.currentTime >= end - 0.04) {
+        const index = clips.findIndex((clip) => clip.id === selected.id);
+        const next = clips[index + 1];
+        setCursor(at + clipSpan(selected));
+        if (next && !video.paused) {
+          resumePlay.current = true;
+          seekTo.current = next.start;
+          setSelectedId(next.id);
+          return;
+        }
+        video.pause();
+        return;
+      }
       setTime(video.currentTime);
+      setCursor(at + Math.max(0, video.currentTime - selected.start));
     };
     video.addEventListener("timeupdate", tick);
     return () => video.removeEventListener("timeupdate", tick);
-  }, [selected]);
+  }, [selected, clips]);
+
+  useEffect(() => {
+    const node = lineRef.current;
+    if (!node || !playing) return;
+    const x = cursor * zoom;
+    if (x < node.scrollLeft + 48 || x > node.scrollLeft + node.clientWidth - 48) {
+      node.scrollLeft = Math.max(0, x - node.clientWidth * 0.3);
+    }
+  }, [cursor, playing, zoom]);
 
   async function addClip(filePath: string): Promise<void> {
     try {
@@ -108,6 +235,10 @@ export function StudioBoard({
       if (duration <= 0) {
         setNotice("This clip has no duration.");
         return;
+      }
+      if (clips.length === 0) {
+        const width = lineRef.current?.clientWidth ?? 960;
+        setZoom(Math.min(160, Math.max(8, (width - 32) / duration)));
       }
       const id = crypto.randomUUID();
       const next: BoardClip = {
@@ -135,6 +266,66 @@ export function StudioBoard({
 
   function patch(id: string, change: Partial<BoardClip>): void {
     setClips((current) => current.map((clip) => (clip.id === id ? { ...clip, ...change } : clip)));
+  }
+
+  function togglePlay(): void {
+    const video = videoRef.current;
+    if (!video) {
+      const first = clips[0];
+      if (!first) return;
+      resumePlay.current = true;
+      seekTo.current = first.start;
+      setSelectedId(first.id);
+      setCursor(0);
+      return;
+    }
+    if (!video.paused) {
+      video.pause();
+      return;
+    }
+    if (selected && (video.currentTime < selected.start || video.currentTime > selected.end - 0.05)) {
+      video.currentTime = selected.start;
+    }
+    void video.play().catch(() => setPlaying(false));
+  }
+  toggleRef.current = togglePlay;
+
+  function timeAt(event: { clientX: number }): number {
+    const node = lineRef.current;
+    if (!node) return 0;
+    const box = node.getBoundingClientRect();
+    return (event.clientX - box.left + node.scrollLeft) / zoom;
+  }
+
+  function scrubMove(event: { clientX: number }): void {
+    if (!scrubbing.current) return;
+    seekTimeline(timeAt(event));
+  }
+
+  function seekTimeline(at: number): void {
+    const clamped = Math.max(0, Math.min(total, at));
+    setCursor(clamped);
+    const place = locateTime(clips, clamped);
+    if (!place) return;
+    const clip = clips[place.index];
+    const source = clip.start + place.into;
+    setSelectedId(clip.id);
+    setCropMode(false);
+    seekTo.current = source;
+    setTime(source);
+    if (videoRef.current && selectedId === clip.id) videoRef.current.currentTime = source;
+  }
+
+  function splitHere(): void {
+    const rightId = crypto.randomUUID();
+    const next = splitClip(clips, cursor, (clip) => ({ ...clip, id: rightId }));
+    if (next.length === clips.length) {
+      setNotice("Zoom in and place the playhead inside a clip.");
+      return;
+    }
+    setClips(next);
+    setSelectedId(rightId);
+    setNotice(null);
   }
 
   function measure(): void {
@@ -180,7 +371,7 @@ export function StudioBoard({
   return (
     <section className="studio-board">
       <header className="studio-head">
-        <button type="button" className="hub-back" onClick={onBack}>Back</button>
+        <BackButton onClick={onBack} />
         <div>
           <span className="hub-kicker">STUDIO</span>
           <strong>Editor</strong>
@@ -188,11 +379,11 @@ export function StudioBoard({
         <button type="button" className="export-btn" disabled={busy || clips.length === 0} onClick={() => void exportLine()}>
           {progress !== null ? `Exporting ${Math.round(progress * 100)}%` : "Export"}
         </button>
-        <div className="window-controls">
-          <button type="button" className="win-btn" aria-label="Minimize" onClick={() => window.lumen.minimize()}>–</button>
-          <button type="button" className="win-btn" aria-label="Maximize" onClick={() => window.lumen.toggleMaximize()}>□</button>
-          <button type="button" className="win-btn close" aria-label="Close" onClick={() => window.lumen.close()}>×</button>
-        </div>
+        <WindowControls
+          onMinimize={() => window.lumen.minimize()}
+          onMaximize={() => window.lumen.toggleMaximize()}
+          onClose={() => window.lumen.close()}
+        />
       </header>
       <div className="studio-body">
         <aside className="studio-media">
@@ -220,11 +411,13 @@ export function StudioBoard({
               <button
                 key={item.path}
                 type="button"
+                className="studio-media-card"
                 draggable
                 onDragStart={(event) => event.dataTransfer.setData("text/plain", item.path)}
                 onClick={() => void addClip(item.path)}
               >
-                {clipTitle(item.name)}
+                <span className="studio-thumb"><Poster poster={posters[item.path]} /></span>
+                <span>{clipTitle(item.name)}</span>
               </button>
             ))}
           </div>
@@ -236,11 +429,25 @@ export function StudioBoard({
                 ref={videoRef}
                 key={selected.id}
                 src={mediaUrl(selected.path)}
-                onLoadedMetadata={measure}
+                onLoadedMetadata={() => {
+                  measure();
+                  const video = videoRef.current;
+                  if (video && seekTo.current !== null) {
+                    video.currentTime = seekTo.current;
+                    seekTo.current = null;
+                  }
+                  if (video && resumePlay.current) {
+                    resumePlay.current = false;
+                    void video.play().catch(() => setPlaying(false));
+                  }
+                }}
+                onClick={() => { if (!cropMode) togglePlay(); }}
                 onPlay={() => {
+                  setPlaying(true);
                   const video = videoRef.current;
                   if (video && video.currentTime < selected.start) video.currentTime = selected.start;
                 }}
+                onPause={() => setPlaying(false)}
               />
             ) : (
               <p>Drop clips from Media onto the timeline.</p>
@@ -289,11 +496,66 @@ export function StudioBoard({
               >
                 Crop
               </button>
-              <button type="button" className="choice" onClick={() => videoRef.current?.play()}>Play</button>
             </div>
           ) : null}
+          <div className="studio-tools studio-transport">
+            <button
+              type="button"
+              className="studio-play"
+              aria-label={playing ? "Pause" : "Play"}
+              data-tooltip={playing ? "Pause · Space" : "Play · Space"}
+              disabled={clips.length === 0}
+              onClick={togglePlay}
+            >
+              <PlaybackGlyph playing={playing} />
+            </button>
+            <span className="studio-cursor">{formatClock(cursor)} / {formatClock(total)}</span>
+            <button type="button" className="choice" disabled={clips.length === 0} onClick={splitHere}>Split</button>
+            <button
+              type="button"
+              className="choice"
+              disabled={!selected}
+              onClick={() => {
+                if (!selectedId) return;
+                setClips((current) => current.filter((clip) => clip.id !== selectedId));
+                setSelectedId(null);
+              }}
+            >
+              Delete
+            </button>
+            <label className="studio-zoom">
+              Zoom
+              <input
+                type="range"
+                min={8}
+                max={480}
+                value={zoom}
+                aria-label="Timeline zoom"
+                onChange={(event) => setZoom(Number(event.target.value))}
+              />
+            </label>
+          </div>
           <div
             className="studio-line"
+            ref={lineRef}
+            onPointerDown={(event) => {
+              if ((event.target as HTMLElement).closest("button, .studio-playhead")) return;
+              press.current = { x: event.clientX, y: event.clientY, time: timeAt(event) };
+            }}
+            onPointerMove={scrubMove}
+            onPointerUp={(event) => {
+              if (scrubbing.current) {
+                scrubbing.current = false;
+                return;
+              }
+              const start = press.current;
+              press.current = null;
+              if (!start) return;
+              const moved = Math.hypot(event.clientX - start.x, event.clientY - start.y);
+              if (moved > 5 || (event.target as HTMLElement).closest("button")) return;
+              videoRef.current?.pause();
+              seekTimeline(start.time);
+            }}
             onDragOver={(event) => event.preventDefault()}
             onDrop={(event) => {
               event.preventDefault();
@@ -301,46 +563,90 @@ export function StudioBoard({
               if (filePath) void addClip(filePath);
             }}
           >
-            {clips.length === 0 ? <span>Timeline</span> : clips.map((clip, index) => (
-              <article
-                key={clip.id}
-                className={clip.id === selectedId ? "is-on" : ""}
-                draggable
-                onDragStart={(event) => event.dataTransfer.setData("application/x-lumen-clip", clip.id)}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  const id = event.dataTransfer.getData("application/x-lumen-clip");
-                  const filePath = event.dataTransfer.getData("text/plain");
-                  if (filePath && !id) {
-                    void addClip(filePath);
-                    return;
-                  }
-                  if (!id || id === clip.id) return;
-                  setClips((current) => {
-                    const moving = current.find((item) => item.id === id);
-                    if (!moving) return current;
-                    const rest = current.filter((item) => item.id !== id);
-                    const at = rest.findIndex((item) => item.id === clip.id);
-                    rest.splice(at < 0 ? rest.length : at, 0, moving);
-                    return rest;
-                  });
-                }}
-              >
-                <button type="button" onClick={() => { setSelectedId(clip.id); setCropMode(false); }}>
-                  <em>{index + 1}</em>
-                  {clipTitle(clip.name)}
-                  <small>{formatClock(clip.end - clip.start)}</small>
-                </button>
-                <button type="button" aria-label={`Remove ${clip.name}`} onClick={() => {
-                  setClips((current) => current.filter((item) => item.id !== clip.id));
-                  if (selectedId === clip.id) setSelectedId(null);
-                }}>
-                  <Icon name="close" />
-                </button>
-              </article>
-            ))}
+            {clips.length === 0 ? <span className="studio-empty">Timeline</span> : (
+              <div className="studio-sheet" style={{ width: Math.max(viewport.width, total * zoom) }}>
+                <div className="studio-ruler" style={{ width: Math.max(1, total * zoom) }}>
+                  {rulerMarks.map((mark) => (
+                    <span key={mark} style={{ left: mark * zoom }}>{rulerLabel(mark, step)}</span>
+                  ))}
+                </div>
+                <div
+                  className="studio-playhead"
+                  style={{ left: cursor * zoom }}
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                    event.preventDefault();
+                    scrubbing.current = true;
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    videoRef.current?.pause();
+                  }}
+                  onPointerMove={scrubMove}
+                  onPointerUp={() => { scrubbing.current = false; }}
+                />
+                <div className="studio-track" style={{ width: Math.max(1, total * zoom) }}>
+                  {clips.map((clip) => {
+                    const width = Math.max(1, clipSpan(clip) * zoom);
+                    let origin = 0;
+                    for (const item of clips) {
+                      if (item.id === clip.id) break;
+                      origin += clipSpan(item) * zoom;
+                    }
+                    return (
+                      <article
+                        key={clip.id}
+                        className={clip.id === selectedId ? "is-on" : ""}
+                        style={{ width }}
+                        draggable
+                        onDragStart={(event) => event.dataTransfer.setData("application/x-lumen-clip", clip.id)}
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          const id = event.dataTransfer.getData("application/x-lumen-clip");
+                          const filePath = event.dataTransfer.getData("text/plain");
+                          if (filePath && !id) {
+                            void addClip(filePath);
+                            return;
+                          }
+                          if (!id || id === clip.id) return;
+                          setClips((current) => {
+                            const moving = current.find((item) => item.id === id);
+                            if (!moving) return current;
+                            const rest = current.filter((item) => item.id !== id);
+                            const at = rest.findIndex((item) => item.id === clip.id);
+                            rest.splice(at < 0 ? rest.length : at, 0, moving);
+                            return rest;
+                          });
+                        }}
+                      >
+                        <Filmstrip
+                          path={clip.path}
+                          start={clip.start}
+                          end={clip.end}
+                          width={width}
+                          poster={posterImage(posters[clip.path])}
+                          viewLeft={viewport.left - origin}
+                          viewRight={viewport.left + viewport.width - origin}
+                        />
+                        <span className="studio-chip">{clipTitle(clip.name)}</span>
+                        <button
+                          type="button"
+                          data-remove
+                          aria-label={`Remove ${clip.name}`}
+                          onPointerDown={(event) => event.stopPropagation()}
+                          onClick={() => {
+                            setClips((current) => current.filter((item) => item.id !== clip.id));
+                            if (selectedId === clip.id) setSelectedId(null);
+                          }}
+                        >
+                          <Icon name="close" />
+                        </button>
+                      </article>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
           {notice ? <p className="studio-note">{notice}</p> : null}
         </div>

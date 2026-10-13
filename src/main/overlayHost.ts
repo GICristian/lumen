@@ -3,7 +3,9 @@ import type { NativeImage } from "electron";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { parseAccelerator } from "@shared/shortcut";
+import { resolveTheme } from "@shared/theme";
 import { getSettings, patchSettings } from "./settings";
+import { openScreenshot } from "./screenshotHost";
 import {
   focusWindow,
   hwndOf,
@@ -23,6 +25,7 @@ let openPlayer = (): void => undefined;
 let currentShortcut = "";
 let vaultShortcut = "";
 let replayShortcut = "";
+let screenshotShortcut = "";
 let saveReplay = (): void => undefined;
 let openVault = (): void => undefined;
 let iconFile = "";
@@ -76,7 +79,7 @@ function createOverlay(): BrowserWindow {
     show: false,
     focusable: false,
     roundedCorners: true,
-    backgroundColor: "#1b2026",
+    backgroundColor: resolveTheme(getSettings()).background,
     icon: iconFile,
     webPreferences: {
       preload: path.join(__dirname, "../preload/index.js"),
@@ -100,7 +103,7 @@ function createOverlay(): BrowserWindow {
   win.on("blur", () => {
     if (!acceptOutside || outsideHold > 0) return;
     if (win.isDestroyed() || !win.isVisible()) return;
-    dismissOverlay(win);
+    void dismissOverlay(win, false);
   });
   win.on("closed", () => {
     overlay = null;
@@ -175,7 +178,7 @@ function pauseOverlayMedia(win: BrowserWindow): Promise<void> {
     .catch(() => undefined);
 }
 
-function dismissOverlay(win: BrowserWindow): void {
+function dismissOverlay(win: BrowserWindow, restoreFocus = true): Promise<void> {
   acceptOutside = false;
   if (outsideTimer) clearTimeout(outsideTimer);
   disarmMouse();
@@ -186,9 +189,9 @@ function dismissOverlay(win: BrowserWindow): void {
       win.hide();
       win.setFocusable(false);
     }
-    if (game) guard(() => focusWindow(game));
+    if (game && restoreFocus) guard(() => focusWindow(game));
   };
-  void pauseOverlayMedia(win).finally(finish);
+  return pauseOverlayMedia(win).finally(finish);
 }
 
 export function toggleOverlay(): void {
@@ -228,8 +231,9 @@ function showOverlay(file?: string): void {
   if (opening) armOutsideClose();
 }
 
-export function hideOverlay(): void {
-  if (overlay && !overlay.isDestroyed()) dismissOverlay(overlay);
+export function hideOverlay(restoreFocus = true): Promise<void> {
+  if (overlay && !overlay.isDestroyed()) return dismissOverlay(overlay, restoreFocus);
+  return Promise.resolve();
 }
 
 export function isOverlayWindow(win: BrowserWindow | null): boolean {
@@ -242,9 +246,14 @@ export function focusOverlay(win: BrowserWindow): void {
   guard(() => focusWindow(hwndOf(win.getNativeWindowHandle())));
 }
 
+function shortcutBusy(parsed: string, current: string): boolean {
+  const used = [currentShortcut, vaultShortcut, replayShortcut, screenshotShortcut];
+  return used.some((item) => item === parsed && item !== current);
+}
+
 export function registerOverlayShortcut(accelerator: string): boolean {
   const parsed = parseAccelerator(accelerator);
-  if (!parsed || parsed === vaultShortcut || parsed === replayShortcut) return false;
+  if (!parsed || shortcutBusy(parsed, currentShortcut)) return false;
   if (currentShortcut) globalShortcut.unregister(currentShortcut);
   const ok = globalShortcut.register(parsed, toggleOverlay);
   currentShortcut = ok ? parsed : "";
@@ -253,7 +262,7 @@ export function registerOverlayShortcut(accelerator: string): boolean {
 
 export function registerVaultShortcut(accelerator: string): boolean {
   const parsed = parseAccelerator(accelerator);
-  if (!parsed || parsed === currentShortcut || parsed === replayShortcut) return false;
+  if (!parsed || shortcutBusy(parsed, vaultShortcut)) return false;
   if (vaultShortcut === parsed) return true;
   const ok = globalShortcut.register(parsed, () => openVault());
   if (!ok) return false;
@@ -268,7 +277,7 @@ export function bindReplaySaver(save: () => void): void {
 
 export function registerReplayShortcut(accelerator: string): boolean {
   const parsed = parseAccelerator(accelerator);
-  if (!parsed || parsed === currentShortcut || parsed === vaultShortcut) return false;
+  if (!parsed || shortcutBusy(parsed, replayShortcut)) return false;
   if (replayShortcut === parsed) return true;
   const ok = globalShortcut.register(parsed, () => saveReplay());
   if (!ok) return false;
@@ -350,6 +359,9 @@ export function installShell(options: {
   if (!registerVaultShortcut(settings.vaultAccelerator)) {
     console.error("vault shortcut unavailable", settings.vaultAccelerator);
   }
+  if (!registerScreenshotShortcut(settings.screenshotAccelerator)) {
+    console.error("screenshot shortcut unavailable", settings.screenshotAccelerator);
+  }
   applyLaunchOnStartup(settings.launchOnStartup);
 
   if (existsSync(options.iconPath)) {
@@ -376,10 +388,21 @@ export function installShell(options: {
   });
 }
 
+export function registerScreenshotShortcut(accelerator: string): boolean {
+  const parsed = parseAccelerator(accelerator);
+  if (!parsed || shortcutBusy(parsed, screenshotShortcut)) return false;
+  if (screenshotShortcut === parsed) return true;
+  const ok = globalShortcut.register(parsed, () => { void openScreenshot(); });
+  if (!ok) return false;
+  if (screenshotShortcut) globalShortcut.unregister(screenshotShortcut);
+  screenshotShortcut = parsed;
+  return true;
+}
+
 export async function saveOverlayShortcut(accelerator: string): Promise<void> {
   const parsed = parseAccelerator(accelerator);
-  if (!parsed) throw new Error("Shortcut needs Ctrl, Alt, or Shift");
-  if (parsed === vaultShortcut || parsed === replayShortcut) {
+  if (!parsed) throw new Error("That key cannot be a shortcut");
+  if (shortcutBusy(parsed, currentShortcut)) {
     throw new Error("That shortcut is already used");
   }
   if (!registerOverlayShortcut(parsed)) throw new Error("That shortcut is already used");
@@ -388,8 +411,8 @@ export async function saveOverlayShortcut(accelerator: string): Promise<void> {
 
 export async function saveVaultShortcut(accelerator: string): Promise<void> {
   const parsed = parseAccelerator(accelerator);
-  if (!parsed) throw new Error("Shortcut needs Ctrl, Alt, or Shift");
-  if (parsed === currentShortcut || parsed === replayShortcut) {
+  if (!parsed) throw new Error("That key cannot be a shortcut");
+  if (shortcutBusy(parsed, vaultShortcut)) {
     throw new Error("That shortcut is already used");
   }
   if (!registerVaultShortcut(parsed)) throw new Error("That shortcut is already used");
@@ -398,10 +421,20 @@ export async function saveVaultShortcut(accelerator: string): Promise<void> {
 
 export async function saveReplayShortcut(accelerator: string): Promise<void> {
   const parsed = parseAccelerator(accelerator);
-  if (!parsed) throw new Error("Shortcut needs Ctrl, Alt, or Shift");
-  if (parsed === currentShortcut || parsed === vaultShortcut) {
+  if (!parsed) throw new Error("That key cannot be a shortcut");
+  if (shortcutBusy(parsed, replayShortcut)) {
     throw new Error("That shortcut is already used");
   }
   if (!registerReplayShortcut(parsed)) throw new Error("That shortcut is already used");
   await patchSettings({ replayAccelerator: parsed });
+}
+
+export async function saveScreenshotShortcut(accelerator: string): Promise<void> {
+  const parsed = parseAccelerator(accelerator);
+  if (!parsed) throw new Error("That key cannot be a shortcut");
+  if (shortcutBusy(parsed, screenshotShortcut)) {
+    throw new Error("That shortcut is already used");
+  }
+  if (!registerScreenshotShortcut(parsed)) throw new Error("That shortcut is already used");
+  await patchSettings({ screenshotAccelerator: parsed });
 }

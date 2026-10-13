@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { FolderItem } from "@shared/contracts";
 import { clipTitle, formatBytes } from "@shared/clips";
-import { formatClock } from "../player/usePlayback";
-import { mediaUrl } from "../player/usePlayback";
+import { formatClock, mediaUrl } from "../player/usePlayback";
+import { SeekHover, seekLeft } from "./SeekHover";
 import { EditMenu } from "./EditMenu";
 import { Icon } from "./Icon";
 import { VolumeControl } from "./VolumeControl";
@@ -19,6 +19,10 @@ export function OverlayPreview({
   onVolume,
   favorite = false,
   onFavorite,
+  hasPrevious = false,
+  hasNext = false,
+  onPrevious,
+  onNext,
 }: {
   item: FolderItem;
   onBack: () => void;
@@ -28,6 +32,10 @@ export function OverlayPreview({
   onVolume: (value: number) => void;
   favorite?: boolean;
   onFavorite?: () => void;
+  hasPrevious?: boolean;
+  hasNext?: boolean;
+  onPrevious?: () => void;
+  onNext?: () => void;
 }) {
   const video = useRef<HTMLVideoElement>(null);
   const [source, setSource] = useState<string | null>(null);
@@ -125,10 +133,19 @@ export function OverlayPreview({
         {feedback ? <PlaybackFeedback text={feedback} /> : null}
       </div>
       <footer className="overlay-preview-meta">
-        <span>{item.name}</span>
+        <div className="clip-step">
+          <button type="button" disabled={!hasPrevious} onClick={onPrevious}>
+            <Icon name="previous" /> Previous
+          </button>
+          <button type="button" disabled={!hasNext} onClick={onNext}>
+            Next <Icon name="next" />
+          </button>
+        </div>
         <label className="preview-scrubber"><span>{formatClock(current)}</span><span className="preview-track" style={{ "--position": `${duration ? current / duration * 100 : 0}%` } as CSSProperties}>
           <input type="range" min={0} max={duration || 0} step={.1} disabled={!duration} value={Math.min(current, duration || 0)} aria-label="Preview position" aria-valuetext={`${formatClock(current)} of ${formatClock(duration)}`} onPointerMove={(event) => { const box = event.currentTarget.getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (event.clientX - box.left) / box.width)); setHover({ ratio, time: ratio * duration }); }} onPointerLeave={() => setHover(null)} onChange={(event) => { const next=Number(event.target.value); if(video.current) video.current.currentTime=next; setCurrent(next); }} />
-          {hover && duration ? <output className="preview-time-tooltip" style={{ left: `clamp(28px, ${hover.ratio * 100}%, calc(100% - 28px))` }}>{formatClock(hover.time)}</output> : null}
+          {hover && duration && item.path ? (
+            <SeekHover path={item.path} time={hover.time} left={seekLeft(hover.time, duration)} />
+          ) : null}
         </span><span>{formatClock(duration)}</span></label>
         <VolumeControl value={volume} onChange={onVolume} />
         <span>{formatBytes(item.sizeBytes)}</span>

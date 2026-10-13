@@ -3,16 +3,18 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { mediaFileResponse } from "./mediaFile";
-import { installShell } from "./overlayHost";
+import { hideOverlay, installShell } from "./overlayHost";
 import { initReplay, stopReplay } from "./replayHost";
 import { initVault, vaultLock } from "./vault";
 import { videoArg } from "./library";
 import { hideToTray, registerIpc, revealWindow } from "./ipc";
-import { getSettings, initSettings, patchSettings } from "./settings";
+import { resolveTheme } from "@shared/theme";
+import { getSettings, initSettings, patchSettings, watchSettings } from "./settings";
 import { initFavorites } from "./favorites";
 import { initActivity } from "./activity";
 import { initLumenFolders } from "./lumenFolders";
 import { initUpdateNotice, initUpdates } from "./updates";
+import { warmScreenshot } from "./screenshotHost";
 
 app.commandLine.appendSwitch("enable-features", "PlatformHEVCDecoderSupport");
 app.commandLine.appendSwitch(
@@ -191,6 +193,18 @@ if (handingOff) {
     });
 
     await initSettings(app.getPath("userData"));
+    watchSettings((settings) => {
+      const background = resolveTheme(settings).background;
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (win.isDestroyed()) continue;
+        const url = win.webContents.getURL();
+        const chrome = url.includes("replay-pill")
+          || url.includes("replay-capture")
+          || url.includes("screenshot");
+        if (!chrome) win.setBackgroundColor(background);
+        win.webContents.send("theme:changed", settings);
+      }
+    });
     await initFavorites(app.getPath("userData"));
     await initActivity(app.getPath("userData"));
     await initLumenFolders(app.getPath("userData"));
@@ -217,7 +231,18 @@ if (handingOff) {
       const clip = typeof filePath === "string" ? filePath : "";
       mainWindow?.webContents.send("studio:open", clip);
     });
+    ipcMain.handle("settings:open", async (_event, page: unknown) => {
+      await hideOverlay(false);
+      showMain();
+      const destination = page === "replay" ? "replay" : "settings";
+      const contents = mainWindow?.webContents;
+      if (!contents) return;
+      if (contents.isLoadingMainFrame()) {
+        contents.once("did-finish-load", () => contents.send("settings:open", destination));
+      } else contents.send("settings:open", destination);
+    });
     initReplay(path.join(userData, "replay-buffer"));
+    warmScreenshot();
     await initUpdateNotice(userData);
     initUpdates(() => {
       quitting = true;

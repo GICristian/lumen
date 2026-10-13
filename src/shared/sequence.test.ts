@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSequenceArgs, sequenceFrame } from "./sequence";
+import { buildSequenceArgs, sequenceFrame, splitClip } from "./sequence";
 import type { SequenceClip } from "./sequence";
 
 function clip(patch: Partial<SequenceClip> = {}): SequenceClip {
@@ -32,6 +32,16 @@ describe("buildSequenceArgs", () => {
     expect(graph).toContain("anullsrc=");
     expect(args).toContain("18");
     expect(args.at(-1)).toBe("D:/Lumen/Edits/one_edit.mp4");
+  });
+
+  it("splits a clip at the playhead and leaves a cut that is too close to the edge", () => {
+    const clips = [clip({ start: 0, end: 10 })];
+    const cut = splitClip(clips, 2.5, (item) => ({ ...item, path: "right" }));
+    expect(cut.map((item) => [item.start, item.end, item.path])).toEqual([
+      [0, 2.5, "D:/clips/one.mp4"],
+      [2.5, 10, "right"],
+    ]);
+    expect(splitClip(clips, 0.01, (item) => item)).toEqual(clips);
   });
 
   it("keeps the larger frame and does not drop a 60 fps clip to 30", () => {

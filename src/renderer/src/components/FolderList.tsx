@@ -4,6 +4,7 @@ import type { ClipSort } from "@shared/clips";
 import { formatBytes, formatWhen } from "@shared/clips";
 import { isFavorite } from "@shared/favorites";
 import { Poster } from "./ClipCard";
+import { HoverScrub } from "./HoverScrub";
 import { EditMenu } from "./EditMenu";
 import { FolderBrowser } from "./FolderBrowser";
 import { Icon } from "./Icon";
@@ -183,7 +184,9 @@ export function FolderList({
             >
               <ClipCheck checked={picked} onPick={(extend) => onSelect(item.path, extend)} />
               <span className={isFavorite(favorites, item.path) ? "folder-thumb is-favorite" : "folder-thumb"}>
-                <Poster poster={posters[item.path]} />
+                <HoverScrub path={item.path}>
+                  <Poster poster={posters[item.path]} />
+                </HoverScrub>
                 <span
                   role="button"
                   tabIndex={0}

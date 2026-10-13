@@ -114,6 +114,7 @@ const SW_SHOWNA = 8;
 const SWP_NOACTIVATE = 0x0010;
 const SWP_NOMOVE = 0x0002;
 const SWP_NOSIZE = 0x0001;
+const SWP_SHOWWINDOW = 0x0040;
 const LSFW_LOCK = 1;
 const LSFW_UNLOCK = 2;
 
@@ -228,6 +229,13 @@ function focusByForce(hwnd: bigint): void {
 export function focusWindow(hwnd: bigint): void {
   if (isIconic(hwnd)) showWindow(hwnd, SW_RESTORE);
   focusByForce(hwnd);
+}
+
+/** Raise a window above everything without becoming the foreground window. */
+export function showOnTop(hwnd: bigint): void {
+  if (hwnd === 0n || !isWindow(hwnd)) return;
+  showWindow(hwnd, SW_SHOWNA);
+  setWindowPos(hwnd, -1n, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
 
 export function showBehind(hwnd: bigint, front: bigint): void {
