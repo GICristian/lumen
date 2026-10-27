@@ -50,7 +50,7 @@ vi.mock("electron", async () => {
   const display = { id: 1, bounds: { x: 0, y: 0, width: 1920, height: 1080 }, scaleFactor: 1 };
   return { BrowserWindow: Window, ipcMain: Object.assign(ipc, { handle: (channel: string, fn: (...args: any[]) => any) => harness.handlers.set(channel, fn) }),
     app: { getPath: () => harness.root }, screen: { getCursorScreenPoint: () => ({ x: 0, y: 0 }), getDisplayNearestPoint: () => display, getDisplayMatching: () => display, getAllDisplays: () => [display], getPrimaryDisplay: () => display, on() {}, removeListener() {} },
-    session: { defaultSession: { setDisplayMediaRequestHandler() {}, setPermissionRequestHandler() {} } },
+    session: { defaultSession: { setDisplayMediaRequestHandler() {}, setPermissionRequestHandler() {}, setPermissionCheckHandler() {} } },
     desktopCapturer: { getSources: async () => [] }, dialog: {},
   };
 });

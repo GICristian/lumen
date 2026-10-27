@@ -3,6 +3,43 @@ import type { SequenceClip } from "./sequence";
 import type { CueStyle } from "./cues";
 import type { Probe } from "./probe";
 import type { Motif, SavedTheme, ThemeId, ThemeMode } from "./theme";
+import type { SoundboardLibrary, SoundClip } from "./plugins";
+
+export type { SoundboardLibrary, SoundClip };
+
+export type PerfSample = {
+  fps: number | null;
+  cpu: number | null;
+  gpu: number | null;
+  ram: number | null;
+};
+
+export type PerfDisplay = {
+  id: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  primary: boolean;
+};
+
+/** Where the readout sits, plus the look applied on top of the same sample. */
+export type PerfPlacement = {
+  x: number;
+  y: number;
+  scale: number;
+  opacity: number;
+};
+
+export type PerfLook = {
+  scale: number;
+  opacity: number;
+};
+
+export type ClickerState = {
+  running: boolean;
+  holding: boolean;
+};
 
 export type Settings = {
   volume: number;
@@ -28,6 +65,8 @@ export type Settings = {
   replayHeight: 720 | 1080;
   replayMic: boolean;
   replayMicDeviceId: string;
+  /** Stable name of the chosen microphone. The device id changes between launches. */
+  replayMicLabel: string;
   replayMicGain: number;
   replaySystemAudio: boolean;
   replaySystemGain: number;
@@ -40,6 +79,42 @@ export type Settings = {
   /** Desktop-capturer id such as `screen:0:0`. Empty follows the cursor. */
   replayDisplayId: string;
   screenshotAccelerator: string;
+  soundboardEnabled: boolean;
+  soundboardAccelerator: string;
+  soundboardVolume: number;
+  /** Play the effect on the headset. */
+  soundboardMonitor: boolean;
+  /** Send the effect to the voice cable. The microphone stays on its own device. */
+  soundboardDiscord: boolean;
+  /** Also feed the microphone into the cable. Off avoids a second copy and volume ducking. */
+  soundboardMic: boolean;
+  /** Chromium output id. Empty picks the first virtual cable. */
+  soundboardDiscordDeviceId: string;
+  /** Macro Bind plugin. Off until the user turns it on. */
+  macroEnabled: boolean;
+  /** While the plugin is on, this is the live arm. Off ignores the bind. */
+  macroLive: boolean;
+  /** Key or mouse button that toggles Live. It is not a macro trigger. */
+  macroPowerKind: "none" | "key" | "mouse";
+  macroPowerVk: number;
+  macroPowerMouse: string;
+  macroPowerName: string;
+  /** Quiet performance readout. Off until the user turns it on. */
+  perfEnabled: boolean;
+  /** Top-left of the readout, in screen pixels. Null keeps the default corner. */
+  perfBounds: { x: number; y: number } | null;
+  /** 0.8 to 1. The line grows from its top-left. */
+  perfScale: number;
+  /** 0.35 to 1. Fades the card. The sample rate does not change. */
+  perfOpacity: number;
+  /** Repeats one mouse button. Off until the user turns it on. */
+  clickerEnabled: boolean;
+  clickerButton: "left" | "right" | "middle";
+  /** Milliseconds between clicks. 20 to 2000. */
+  clickerIntervalMs: number;
+  /** Virtual key that arms the clicker. 0 means no key. */
+  clickerToggleVk: number;
+  clickerToggleName: string;
   themeId: ThemeId;
   themeMode: ThemeMode;
   themeMotif: Motif;
@@ -72,6 +147,7 @@ export type ReplayStatus = {
   height: 720 | 1080;
   mic: boolean;
   micDeviceId: string;
+  micLabel: string;
   micGain: number;
   systemAudio: boolean;
   systemGain: number;
@@ -99,6 +175,7 @@ export type ReplayCaptureOptions = {
   height: 720 | 1080;
   mic: boolean;
   micDeviceId: string;
+  micLabel: string;
   micGain: number;
   systemAudio: boolean;
   systemGain: number;
@@ -196,6 +273,8 @@ export type UpdateState = {
   percent: number;
   dismissed: boolean;
   message: string | null;
+  /** Release notes for the offered version, plain text. */
+  notes: string | null;
 };
 
 export type ExportProgress = { jobId: string; ratio: number };
@@ -224,6 +303,7 @@ export type LumenApi = {
   listFolder: (filePath: string) => Promise<FolderListing>;
   listDirectory: (folderPath: string) => Promise<FolderListing>;
   deleteClips: (paths: string[]) => Promise<{ deleted: string[]; failed: string[] }>;
+  renameClip: (filePath: string, title: string) => Promise<FolderItem>;
   searchSubtitles: (
     query: string,
     language: string,
@@ -253,6 +333,9 @@ export type LumenApi = {
   onScreenshotReady: (cb: (frame: string) => void) => () => void;
   onScreenshotReset: (cb: () => void) => () => void;
   onScreenshotCommand: (cb: (kind: "copy" | "save" | "undo") => void) => () => void;
+  onScreenshotPointer: (
+    cb: (point: { x: number; y: number; phase: "move" | "down" | "up" }) => void,
+  ) => () => void;
   onTheme: (cb: (settings: Settings) => void) => () => void;
   setLaunchOnStartup: (enabled: boolean) => Promise<Settings>;
   vaultStatus: () => Promise<VaultStatus>;
@@ -299,6 +382,7 @@ export type LumenApi = {
   replayArm: (on: boolean) => Promise<ReplayStatus>;
   replaySave: () => Promise<ReplayStatus>;
   replayUpdate: (patch: Partial<Settings>) => Promise<ReplayStatus>;
+  replayRememberMic: (deviceId: string, label: string) => Promise<ReplayStatus>;
   replayShortcut: (accelerator: string) => Promise<ReplayStatus>;
   replayFolder: () => Promise<ReplayStatus>;
   onReplayStatus: (cb: (status: ReplayStatus) => void) => () => void;
@@ -323,4 +407,41 @@ export type LumenApi = {
   dismissUpdate: () => Promise<UpdateState>;
   onUpdateState: (cb: (state: UpdateState) => void) => () => void;
   onStudioOpen: (cb: (filePath: string) => void) => () => void;
+  soundboardSounds: () => Promise<SoundboardLibrary>;
+  soundboardFolder: () => Promise<void>;
+  installVoiceCable: () => Promise<string>;
+  routeSoundboardVoice: (active: boolean) => Promise<void>;
+  onSoundboardOpen: (
+    cb: (payload: { sounds: SoundClip[]; volume: number }) => void,
+  ) => () => void;
+  onSoundboardAim: (cb: (aim: { dx: number; dy: number }) => void) => () => void;
+  onSoundboardPlay: (
+    cb: (payload: { path: string; volume: number }) => void,
+  ) => () => void;
+  onSoundboardHide: (cb: () => void) => () => void;
+  showHome: () => Promise<void>;
+  clipViews: () => Promise<Record<string, number>>;
+  noteClipView: (filePath: string) => Promise<Record<string, number>>;
+  macroLibrary: () => Promise<{ macros: import("./macros").MacroCard[] }>;
+  setMacroEnabled: (enabled: boolean) => Promise<Settings>;
+  setMacroLive: (live: boolean) => Promise<Settings>;
+  openMacroEditor: () => Promise<void>;
+  macroDocument: () => Promise<import("./macros").MacroBind[]>;
+  saveMacros: (macros: import("./macros").MacroBind[]) => Promise<import("./macros").MacroBind[]>;
+  importMacros: () => Promise<import("./macros").MacroBind[] | null>;
+  exportMacros: () => Promise<boolean>;
+  macroWindow: (action: "minimize" | "maximize" | "close") => Promise<void>;
+  onMacroChanged: (cb: () => void) => () => void;
+  onPerfSample: (cb: (sample: PerfSample) => void) => () => void;
+  openPerfSettings: () => Promise<void>;
+  perfWindow: (action: "minimize" | "maximize" | "close") => Promise<void>;
+  perfDisplays: () => Promise<PerfDisplay[]>;
+  perfFrame: () => Promise<PerfPlacement>;
+  previewPerf: (placement: PerfPlacement) => void;
+  onPerfLook: (cb: (look: PerfLook) => void) => () => void;
+  openClickerSettings: () => Promise<void>;
+  clickerWindow: (action: "minimize" | "maximize" | "close") => Promise<void>;
+  toggleClicker: () => Promise<ClickerState>;
+  clickerState: () => Promise<ClickerState>;
+  onClickerState: (cb: (state: ClickerState) => void) => () => void;
 };

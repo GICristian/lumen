@@ -15,6 +15,12 @@ import { initActivity } from "./activity";
 import { initLumenFolders } from "./lumenFolders";
 import { initUpdateNotice, initUpdates } from "./updates";
 import { warmScreenshot } from "./screenshotHost";
+import { restoreDiscordInput } from "./discordRoute";
+import { applySoundboard, initSoundboard } from "./soundboardHost";
+import { applyMacro, initMacro } from "./macroHost";
+import { applyPerf, initPerf, stopPerf } from "./perfHost";
+import { applyClicker, initClicker, stopClicker } from "./clickerHost";
+import { initClipViews } from "./clipViews";
 
 app.commandLine.appendSwitch("enable-features", "PlatformHEVCDecoderSupport");
 app.commandLine.appendSwitch(
@@ -198,12 +204,19 @@ if (handingOff) {
       for (const win of BrowserWindow.getAllWindows()) {
         if (win.isDestroyed()) continue;
         const url = win.webContents.getURL();
+        const perfOverlay = url.includes("#/perf") && !url.includes("perf-setup");
         const chrome = url.includes("replay-pill")
           || url.includes("replay-capture")
-          || url.includes("screenshot");
+          || url.includes("screenshot")
+          || url.includes("soundboard")
+          || perfOverlay;
         if (!chrome) win.setBackgroundColor(background);
         win.webContents.send("theme:changed", settings);
       }
+      applySoundboard(settings);
+      applyMacro(settings);
+      applyPerf(settings);
+      applyClicker(settings);
     });
     await initFavorites(app.getPath("userData"));
     await initActivity(app.getPath("userData"));
@@ -231,6 +244,9 @@ if (handingOff) {
       const clip = typeof filePath === "string" ? filePath : "";
       mainWindow?.webContents.send("studio:open", clip);
     });
+    ipcMain.handle("window:home", () => {
+      showHub();
+    });
     ipcMain.handle("settings:open", async (_event, page: unknown) => {
       await hideOverlay(false);
       showMain();
@@ -242,17 +258,28 @@ if (handingOff) {
       } else contents.send("settings:open", destination);
     });
     initReplay(path.join(userData, "replay-buffer"));
+    restoreDiscordInput();
+    initSoundboard(userData);
+    await initMacro(userData);
+    initPerf();
+    initClicker();
+    await initClipViews(userData);
     warmScreenshot();
     await initUpdateNotice(userData);
     initUpdates(() => {
       quitting = true;
       stopReplay();
+      stopPerf();
+      stopClicker();
     });
   });
 
   app.on("before-quit", () => {
     quitting = true;
     stopReplay();
+    stopPerf();
+    stopClicker();
+    restoreDiscordInput();
     void vaultLock();
   });
 

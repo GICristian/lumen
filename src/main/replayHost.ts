@@ -17,16 +17,15 @@ import {
   buildMixSaveArgs,
   buildSaveArgs,
   concatLine,
-  pictureBroken,
   replayBuffer,
   replayFileName,
   replayFps,
   replayHeight,
-  replayGain, replayBitrate, replayDevice, replayDisplay,
+  replayGain, replayBitrate, replayDevice, replayDisplay, replayMicLabel,
 } from "@shared/replay";
 import { displayAppName } from "@shared/appTitle";
 import { replayFolderName } from "@shared/captureFolder";
-import { firstKeyframeSeconds, firstSampleSeconds, timecodeScaleNs } from "@shared/webmPieces";
+import { firstKeyframeSeconds, firstSampleSeconds, openingHoldSeconds, timecodeScaleNs } from "@shared/webmPieces";
 import { showReplayToast, dismissReplayToast } from "./replayToast";
 import { replayLog } from "./replayLog";
 import { ReplayStore } from "./replayStore";
@@ -45,6 +44,7 @@ import { productName } from "./productName";
 import { focusedApp, foregroundCovers, holdCaptureClock, releaseCaptureClock } from "./win32";
 import { getSettings, patchSettings } from "./settings";
 import { recordActivity } from "./activity";
+import { macroIsPlaying } from "./macroGate";
 import { rememberLumenFolder } from "./lumenFolders";
 import { indicatorBounds, RECORDING_INDICATOR_HTML } from "@shared/recordingIndicator";
 
@@ -125,6 +125,7 @@ function status(): ReplayStatus {
     height: settings.replayHeight,
     mic: settings.replayMic,
     micDeviceId: settings.replayMicDeviceId,
+    micLabel: settings.replayMicLabel,
     micGain: settings.replayMicGain,
     systemAudio: settings.replaySystemAudio,
     systemGain: settings.replaySystemGain,
@@ -283,8 +284,8 @@ function captureOptions(): ReplayCaptureOptions {
   const settings = getSettings();
   const display = captureDisplay();
   return { sessionId: store.sessionId, sourceWidth: display.bounds.width * display.scaleFactor,
-    sourceHeight: display.bounds.height * display.scaleFactor, fps: settings.replayFps, height: settings.replayHeight, mic: settings.replayMic,
-    micDeviceId: settings.replayMicDeviceId, micGain: settings.replayMicGain,
+    sourceHeight: display.bounds.height * display.scaleFactor, fps: settings.replayFps, height: settings.replayHeight,     mic: settings.replayMic,
+    micDeviceId: settings.replayMicDeviceId, micLabel: settings.replayMicLabel, micGain: settings.replayMicGain,
     systemAudio: settings.replaySystemAudio, systemGain: settings.replaySystemGain,
     noiseSuppression: settings.replayNoiseSuppression, echoCancellation: settings.replayEchoCancellation,
     micHum: settings.replayMicHum,
@@ -358,22 +359,26 @@ async function prune(): Promise<void> {
   if (armed) await store.prune(getSettings().replaySeconds);
 }
 
-function picturePlays(file: string): Promise<boolean> {
+function probePicture(file: string, seek: string | null): Promise<boolean> {
   return new Promise((resolve) => {
+    const args = ["-v", "error"];
+    if (seek) args.push("-ss", seek);
+    args.push("-i", file, "-frames:v", "1", "-f", "null", "-");
     let proc;
     try {
-      proc = spawn(ffmpegBinary(), ["-v", "error", "-i", file, "-t", "2", "-map", "0:v:0", "-f", "null", "-"], { windowsHide: true });
+      proc = spawn(ffmpegBinary(), args, { windowsHide: true });
     } catch {
       resolve(false);
       return;
     }
-    let err = "";
-    proc.stderr?.on("data", (chunk: Buffer) => {
-      err += String(chunk);
-    });
     proc.on("error", () => resolve(false));
-    proc.on("close", (code) => resolve(code === 0 && !pictureBroken(err)));
+    proc.on("close", (code) => resolve(code === 0));
   });
+}
+
+/** One decodable frame is enough. A warning on the opening must not re-encode the clip. */
+function picturePlays(file: string): Promise<boolean> {
+  return probePicture(file, null).then((ok) => (ok ? true : probePicture(file, "1")));
 }
 
 let saveEncoder = "libx264";
@@ -410,7 +415,7 @@ async function assemble(initPath: string, parts: string[], dest: string): Promis
   }
 }
 
-function spawnFfmpeg(args: string[]): Promise<void> {
+function spawnFfmpeg(args: string[], tolerateProbe = false): Promise<void> {
   return new Promise((resolve, reject) => {
     let proc;
     try {
@@ -427,7 +432,7 @@ function spawnFfmpeg(args: string[]): Promise<void> {
     });
     proc.on("error", () => reject(new Error("ffmpeg is not available")));
     proc.on("close", (code) => {
-      if (code === 0 && !decodeFailed) resolve();
+      if (code === 0 && (tolerateProbe || !decodeFailed)) resolve();
       else reject(new Error(err.trim() || "Could not save the replay."));
     });
   });
@@ -460,7 +465,7 @@ function runSave(
     const args = mix
       ? buildMixSaveArgs(listPath, micPath, output, copy, duration, encoder, mix.systemGain, mix.micGain)
       : buildSaveArgs(listPath, output, copy, duration, encoder);
-    return spawnFfmpeg(args);
+    return spawnFfmpeg(args, copy);
   });
 }
 
@@ -471,7 +476,7 @@ function runJoined(take: JoinedTake, output: string, copy: boolean, duration: nu
       take.systemGain, take.micGain, take.videoStart, take.micStart, take.micLeadMs, take.micHum,
     )
     : buildFileSaveArgs(take.video, output, copy, duration, encoder, take.videoStart, take.systemGain);
-  return spawnFfmpeg(args);
+  return spawnFfmpeg(args, copy);
 }
 
 async function freePath(filePath: string): Promise<string> {
@@ -549,6 +554,7 @@ async function restart(): Promise<void> {
 }
 
 async function saveReplay(cutoff: number, sessionId: string): Promise<void> {
+  if (macroIsPlaying()) return;
   if (!armed) {
     notice = "Replay is off.";
     showReplayToast(true);
@@ -598,7 +604,9 @@ async function saveReplay(cutoff: number, sessionId: string): Promise<void> {
       const firstPicture = firstSampleSeconds(opening, scale);
       const keyframe = firstKeyframeSeconds(opening, scale);
       const gap = keyframe - firstPicture;
-      const lead = firstPicture > 0.001 && gap > 0.001 && gap < 8 ? gap : 0;
+      const keyLead = firstPicture > 0.001 && gap > 0.001 && gap < 8 ? gap : 0;
+      const hold = openingHoldSeconds(opening, scale);
+      const lead = Math.max(keyLead, hold);
       if (mix && store.micHeader) {
         joinedMic = path.join(bufferDir, "joined.mic.webm");
         await assemble(store.micHeader, micFiles, joinedMic);
@@ -663,19 +671,23 @@ async function saveReplay(cutoff: number, sessionId: string): Promise<void> {
     lastFile = output;
     notice = "Saved.";
     savedFlash = true;
+    saving = false;
+    publish();
+    showReplayToast(true);
     await rememberLumenFolder({
       name: target.name,
       directory: dir,
       imagePath: target.imagePath,
       savedAt: Date.now(),
-    });
-    await recordActivity({ kind: "recorded", path: output });
+    }).catch(() => undefined);
+    await recordActivity({ kind: "recorded", path: output }).catch(() => undefined);
   } catch (error) {
     notice = error instanceof Error ? error.message : "Could not save the replay.";
   } finally {
     release();
+    const stillSaving = saving;
     saving = false;
-    showReplayToast(true);
+    if (stillSaving) showReplayToast(true);
     await prune().catch(() => undefined);
     if (!armed) clearBuffer();
     publish();
@@ -748,6 +760,9 @@ function installCaptureHandler(): void {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(permission === "media" || permission === "display-capture");
   });
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) => (
+    permission === "media" || permission === "display-capture"
+  ));
 }
 
 export function stopReplay(): void {
@@ -824,6 +839,15 @@ export function initReplay(dir: string): void {
   ipcMain.handle("replay:open", async () => { if (lastFile) { await fs.access(lastFile); dismissReplayToast(); openOverlayFile(lastFile); } });
   ipcMain.on("replay:dismiss", dismissReplayToast);
   ipcMain.handle("replay:status", () => status());
+  ipcMain.handle("replay:remember-mic", async (_event, deviceId: unknown, label: unknown) => {
+    const id = replayDevice(deviceId);
+    const name = replayMicLabel(label);
+    const current = getSettings();
+    if (!id || (current.replayMicDeviceId === id && current.replayMicLabel === name)) return status();
+    await patchSettings({ replayMicDeviceId: id, replayMicLabel: name });
+    publish();
+    return status();
+  });
   ipcMain.handle("replay:arm", (_event, on: unknown) => serialize(async () => {
     try {
       if (on === true) await arm();
@@ -858,7 +882,12 @@ export function initReplay(dir: string): void {
       : replayDisplay(next.replayDisplayId);
     const displayChanged = displayId !== current.replayDisplayId;
     const audio = {
-      replayMicDeviceId: next.replayMicDeviceId === undefined ? current.replayMicDeviceId : replayDevice(next.replayMicDeviceId),
+      replayMicDeviceId: next.replayMicDeviceId === undefined
+        ? current.replayMicDeviceId
+        : replayDevice(next.replayMicDeviceId),
+      replayMicLabel: next.replayMicLabel === undefined
+        ? current.replayMicLabel
+        : replayMicLabel(next.replayMicLabel),
       replayMicGain: next.replayMicGain === undefined ? current.replayMicGain : replayGain(next.replayMicGain),
       replaySystemAudio: typeof next.replaySystemAudio === "boolean" ? next.replaySystemAudio : current.replaySystemAudio,
       replaySystemGain: next.replaySystemGain === undefined ? current.replaySystemGain : replayGain(next.replaySystemGain),

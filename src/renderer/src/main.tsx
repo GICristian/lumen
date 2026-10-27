@@ -9,7 +9,17 @@ const replayToast = window.location.hash.startsWith("#/replay-toast");
 const replayCapture = window.location.hash.startsWith("#/replay-capture");
 const replayPill = window.location.hash.startsWith("#/replay-pill");
 const screenshot = window.location.hash.startsWith("#/screenshot");
+const soundboard = window.location.hash.startsWith("#/soundboard");
+const macro = window.location.hash.startsWith("#/macro");
+const perfSetup = window.location.hash.startsWith("#/perf-setup");
+const perf = window.location.hash.startsWith("#/perf") && !perfSetup;
+const clicker = window.location.hash.startsWith("#/clicker");
 if (overlay) document.documentElement.classList.add("is-overlay");
+if (soundboard) document.documentElement.classList.add("is-soundboard");
+if (macro) document.documentElement.classList.add("is-macro");
+if (perfSetup) document.documentElement.classList.add("is-perf-setup");
+if (perf) document.documentElement.classList.add("is-perf");
+if (clicker) document.documentElement.classList.add("is-clicker");
 if (replayPill) document.documentElement.classList.add("is-replay-pill");
 
 async function boot(): Promise<void> {
@@ -29,7 +39,12 @@ async function boot(): Promise<void> {
     : replayPill ? (await import('./components/ReplayPill')).ReplayPill
       : replayToast ? (await import('./components/ReplayToast')).ReplayToast
         : screenshot ? (await import('./components/ScreenshotSelect')).ScreenshotSelect
-        : overlay ? (await import('./components/Overlay')).OverlayApp : (await import('./App')).App;
+          : soundboard ? (await import('./components/SoundboardWheel')).SoundboardWheel
+            : macro ? (await import('./components/MacroEditor')).MacroEditor
+              : perfSetup ? (await import('./components/PerfSetup')).PerfSetup
+                : perf ? (await import('./components/PerfOverlay')).PerfOverlay
+                  : clicker ? (await import('./components/ClickerSetup')).ClickerSetup
+                    : overlay ? (await import('./components/Overlay')).OverlayApp : (await import('./App')).App;
   createRoot(root!).render(<StrictMode><Component /></StrictMode>);
 }
 void boot();

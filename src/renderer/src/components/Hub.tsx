@@ -5,10 +5,16 @@ import { BrandLockup, BrandMark } from "./BrandMark";
 import { HubSettings } from "./HubSettings";
 import { Icon } from "./Icon";
 import { ReplayPanel } from "./ReplayPanel";
+import { SoundboardPanel } from "./SoundboardPanel";
+import { MacroPanel } from "./MacroPanel";
+import { PerfPanel } from "./PerfPanel";
+import { ClickerPanel } from "./ClickerPanel";
 import { BackButton, WindowControls } from "./WindowChrome";
 
 type Props = {
-  page: "home" | "settings" | "replay";
+  page: "home" | "settings" | "replay" | "soundboard";
+  soundboard: boolean;
+  onOpenSoundboard: () => void;
   shortcut: string;
   vaultShortcut: string;
   launchOnStartup: boolean;
@@ -69,6 +75,8 @@ export function Hub({
   onOpenSettings,
   onOpenReplay,
   onOpenVault,
+  onOpenSoundboard,
+  soundboard,
   onBack,
   onShortcut,
   onLaunch,
@@ -82,7 +90,7 @@ export function Hub({
   const actions: {
     title: string;
     detail: string;
-    icon: "folder" | "screen" | "replay" | "edit" | "lock" | "sliders";
+    icon: "folder" | "screen" | "replay" | "edit" | "lock" | "sliders" | "volume";
     onClick: () => void;
   }[] = [
     {
@@ -115,10 +123,16 @@ export function Hub({
       icon: "lock",
       onClick: onOpenVault,
     },
+    ...(soundboard ? [{
+      title: "Soundboard",
+      detail: "Hold a key for a wheel of sounds",
+      icon: "volume" as const,
+      onClick: onOpenSoundboard,
+    }] : []),
     {
       title: "Settings",
       detail: "Theme, shortcuts and cursor",
-      icon: "sliders",
+      icon: "sliders" as const,
       onClick: onOpenSettings,
     },
   ];
@@ -154,6 +168,14 @@ export function Hub({
             </button>
           </>
         ) : null}
+        <button
+          type="button"
+          className={page === "soundboard" ? "hub-plugins-entry is-on" : "hub-plugins-entry"}
+          onClick={onOpenSoundboard}
+        >
+          <Icon name="sliders" />
+          Plugins
+        </button>
         <WindowControls onMinimize={onMinimize} onMaximize={onMaximize} onClose={onClose} />
       </header>
       {page === "settings" ? (
@@ -179,6 +201,13 @@ export function Hub({
         />
       ) : page === "replay" ? (
         <ReplayPanel />
+      ) : page === "soundboard" ? (
+        <>
+          <SoundboardPanel />
+          <MacroPanel />
+          <PerfPanel />
+          <ClickerPanel />
+        </>
       ) : (
         <>
         <div className="hub-intro">

@@ -89,7 +89,8 @@ export function App() {
   const [cursorSize, setCursorSize] = useState(24);
   const [exportDirectory, setExportDirectory] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
-  const [hubPage, setHubPage] = useState<"home" | "settings" | "vault" | "replay" | "studio">("home");
+  const [hubPage, setHubPage] = useState<"home" | "settings" | "vault" | "replay" | "studio" | "soundboard">("home");
+  const [soundboardOn, setSoundboardOn] = useState(false);
   const [studioSeed, setStudioSeed] = useState<StudioSeed | null>(null);
   const [fromVault, setFromVault] = useState(false);
   const [vaultTitle, setVaultTitle] = useState<string | null>(null);
@@ -616,6 +617,11 @@ export function App() {
 
   useEffect(() => {
     if (!window.lumen) return;
+    return window.lumen.onTheme((settings) => setSoundboardOn(settings.soundboardEnabled));
+  }, []);
+
+  useEffect(() => {
+    if (!window.lumen) return;
     void window.lumen.getSettings().then((settings) => {
       setVolume(settings.volume);
       setLoop(settings.loop);
@@ -624,6 +630,7 @@ export function App() {
       setOverlayShortcut(settings.overlayAccelerator);
       setVaultShortcut(settings.vaultAccelerator);
       setScreenshotShortcut(settings.screenshotAccelerator);
+      setSoundboardOn(settings.soundboardEnabled);
       setTheme({
         themeId: settings.themeId,
         themeMode: settings.themeMode,
@@ -871,7 +878,13 @@ export function App() {
       ) : null}
       {home && hubPage !== "vault" && hubPage !== "studio" ? (
         <Hub
-          page={hubPage === "settings" || hubPage === "replay" ? hubPage : "home"}
+          page={
+            hubPage === "settings" || hubPage === "replay" || hubPage === "soundboard"
+              ? hubPage
+              : "home"
+          }
+          soundboard={soundboardOn}
+          onOpenSoundboard={() => setHubPage("soundboard")}
           shortcut={overlayShortcut}
           vaultShortcut={vaultShortcut}
           screenshotShortcut={screenshotShortcut}

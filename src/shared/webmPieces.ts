@@ -352,6 +352,61 @@ export function firstKeyframeSeconds(bytes: Uint8Array, scaleNs = 1_000_000): nu
   return visit(0, bytes.length);
 }
 
+/**
+ * How long the first visible frame sits still before the next one.
+ * A gap of a few tenths is normal. One or two seconds is the frozen opening.
+ * Returns 0 when the opening is already moving.
+ */
+export function openingHoldSeconds(bytes: Uint8Array, scaleNs = 1_000_000): number {
+  const times: number[] = [];
+  const take = (start: number, limit: number): void => {
+    let tc = 0;
+    let pos = start;
+    while (pos < limit && times.length < 2) {
+      const item = openHeader(bytes, pos, limit);
+      if (!item || item.start <= pos) break;
+      if (item.id === 0x18538067) {
+        take(item.start, Math.min(item.end, limit));
+      } else if (item.id === 0x1F43B675) {
+        const clusterEnd = Math.min(item.end, limit);
+        let cursor = item.start;
+        while (cursor < clusterEnd && times.length < 2) {
+          const field = openHeader(bytes, cursor, clusterEnd);
+          if (!field || field.start <= cursor) break;
+          if (field.id === 0xE7 && cursor < item.start + 24) {
+            tc = 0;
+            for (let i = field.start; i < Math.min(field.end, clusterEnd); i++) {
+              tc = tc * 256 + bytes[i];
+            }
+          }
+          if (field.id === 0xA3 || field.id === 0xA1 || field.id === 0xA0) {
+            const delta = blockDeltaMs(bytes, field.start, clusterEnd);
+            const payload = blockPayload(bytes, field.start, clusterEnd);
+            const payloadEnd = Math.min(field.end, clusterEnd);
+            if (
+              delta !== null && payload !== null
+              && hasPictureStart(bytes, payload, payloadEnd)
+            ) {
+              times.push(secondsOf(tc + delta, scaleNs));
+            }
+          }
+          const next = Math.min(field.end, clusterEnd);
+          if (next <= cursor) break;
+          cursor = next;
+        }
+      }
+      const step = Math.min(item.end, limit);
+      if (step <= pos) break;
+      pos = step;
+    }
+  };
+  take(0, bytes.length);
+  if (times.length < 2) return 0;
+  const gap = times[1] - times[0];
+  if (gap < 0.35 || gap > 4) return 0;
+  return gap;
+}
+
 /** One seek for both files, so a later cluster base cannot delay the microphone. */
 export function sharedMediaStart(videoSeconds: number, micSeconds: number): number {
   const present = [videoSeconds, micSeconds].filter((value) => value > 0.001);

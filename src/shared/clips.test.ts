@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  clipFileName,
   estimateExportBytes,
   filterClips,
   formatBytes,
@@ -37,6 +38,15 @@ describe("sortClips", () => {
       "b.mp4",
       "a.mp4",
     ]);
+  });
+});
+
+describe("clipFileName", () => {
+  it("keeps the extension and drops path characters", () => {
+    expect(clipFileName("Replay.mp4", "  Flying Tuna  ")).toBe("Flying Tuna.mp4");
+    expect(clipFileName("Replay.mp4", "a/b:c")).toBe("abc.mp4");
+    expect(clipFileName("Replay.mp4", "   ")).toBeNull();
+    expect(clipFileName("Replay.mp4", "con")).toBeNull();
   });
 });
 

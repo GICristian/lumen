@@ -118,9 +118,9 @@ button:disabled:hover { transform: none; box-shadow: none; }
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 16px;
-  max-width: min(640px, calc(100% - 32px));
+  max-width: min(720px, calc(100% - 32px));
   padding: 14px 14px 14px 18px;
   border: 1px solid var(--accent);
   border-radius: 16px;
@@ -139,6 +139,16 @@ button:disabled:hover { transform: none; box-shadow: none; }
 }
 .update-close:hover { background: #ffffff10; color: #fff; }
 .update-banner strong { font-weight: 560; font-size: 13px; }
+.update-copy { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.update-copy p {
+  margin: 0;
+  max-height: 96px;
+  overflow: auto;
+  color: #d9d4c8;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
 .update-banner .export-btn { min-height: 34px; padding-inline: 14px; transition: transform 180ms ease; }
 .update-banner .export-btn:hover:not(:disabled) { transform: scale(1.02); }
 /* Picture-first player. The rail reserves picture space whenever it expands. */

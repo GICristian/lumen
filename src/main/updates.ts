@@ -37,6 +37,24 @@ function emit(next: UpdateState): void {
   }
 }
 
+function notesOf(info: { releaseNotes?: unknown }): string | null {
+  const raw = info.releaseNotes;
+  if (typeof raw === "string") {
+    const text = raw.replace(/<[^>]+>/g, " ").replace(/\s+\n/g, "\n").trim();
+    return text || null;
+  }
+  if (!Array.isArray(raw)) return null;
+  const text = raw.map((item) => {
+    if (typeof item === "string") return item;
+    if (item && typeof item === "object" && "note" in item) {
+      const note = (item as { note?: unknown }).note;
+      return typeof note === "string" ? note : "";
+    }
+    return "";
+  }).join("\n").trim();
+  return text || null;
+}
+
 function check(): void {
   if (!app.isPackaged) return;
   if (installing || state.phase === "downloading" || state.phase === "ready") return;
@@ -64,6 +82,7 @@ export function initUpdates(quitForInstall: () => void): void {
       percent: 0,
       dismissed: isDismissed(info.version),
       message: null,
+      notes: notesOf(info),
     });
   });
   autoUpdater.on("download-progress", (progress) => {
@@ -73,10 +92,18 @@ export function initUpdates(quitForInstall: () => void): void {
       percent: progress.percent,
       dismissed: false,
       message: null,
+      notes: state.notes,
     });
   });
   autoUpdater.on("update-downloaded", (info) => {
-    emit({ phase: "ready", version: info.version, percent: 100, dismissed: false, message: null });
+    emit({
+      phase: "ready",
+      version: info.version,
+      percent: 100,
+      dismissed: false,
+      message: null,
+      notes: notesOf(info) ?? state.notes,
+    });
   });
   autoUpdater.on("error", (error) => {
     if (state.phase === "idle") return;
@@ -87,6 +114,7 @@ export function initUpdates(quitForInstall: () => void): void {
       percent: state.percent,
       dismissed: false,
       message: error instanceof Error ? error.message : "The update did not finish.",
+      notes: state.notes,
     });
   });
 
@@ -112,6 +140,7 @@ export function initUpdates(quitForInstall: () => void): void {
           percent: 0,
           dismissed: false,
           message: null,
+          notes: state.notes,
         });
         await autoUpdater.downloadUpdate();
       }
@@ -125,6 +154,7 @@ export function initUpdates(quitForInstall: () => void): void {
         percent: state.percent,
         dismissed: false,
         message: error instanceof Error ? error.message : "The update did not finish.",
+        notes: state.notes,
       });
     }
   });

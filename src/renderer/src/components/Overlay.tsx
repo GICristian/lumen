@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ClipSort } from "@shared/clips";
 import { filterClips, formatWhen, isEditedClip, sortClips } from "@shared/clips";
-import { isFavorite } from "@shared/favorites";
+import { favoriteKey, isFavorite } from "@shared/favorites";
+import { bytesOf, staleClips } from "@shared/cleanup";
+import { formatBytes } from "@shared/clips";
 import type { ActivityItem, ExportRequest, FolderItem, LumenFolder, Settings } from "@shared/contracts";
 import { folderLabels } from "@shared/folders";
 import { acceleratorFromEvent } from "@shared/shortcut";
@@ -57,6 +59,7 @@ const emptySettings: Settings = {
   replayHeight: 1080,
   replayMic: true,
   replayMicDeviceId: "",
+  replayMicLabel: "",
   replayMicGain: 1,
   replaySystemAudio: true,
   replaySystemGain: 1,
@@ -68,6 +71,28 @@ const emptySettings: Settings = {
   replayDirectory: null,
   replayDisplayId: "",
   screenshotAccelerator: "Ctrl+Shift+S",
+  soundboardEnabled: false,
+  soundboardAccelerator: "F8",
+  soundboardVolume: 0.85,
+  soundboardMonitor: true,
+  soundboardDiscord: false,
+  soundboardMic: false,
+  soundboardDiscordDeviceId: "",
+  macroEnabled: false,
+  macroLive: false,
+  macroPowerKind: "none",
+  macroPowerVk: 0,
+  macroPowerMouse: "",
+  macroPowerName: "",
+  perfEnabled: false,
+  perfBounds: null,
+  perfScale: 1,
+  perfOpacity: 0.92,
+  clickerEnabled: false,
+  clickerButton: "left",
+  clickerIntervalMs: 50,
+  clickerToggleVk: 117,
+  clickerToggleName: "F6",
   ...presetDraft("gold"),
   savedThemes: [],
   activeSavedId: null,
@@ -121,6 +146,7 @@ export function OverlayApp() {
   const [progress, setProgress] = useState<number | null>(null);
   const [toast, setToast] = useState<{ text: string; path?: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [views, setViews] = useState<Record<string, number>>({});
 
   const loadFolder = useCallback(async (next: string) => {
     setFolder(next);
@@ -194,8 +220,27 @@ export function OverlayApp() {
 
   useEffect(() => {
     void window.lumen.activity().then(setActivity).catch(() => setActivity([]));
-    return window.lumen.onActivity(setActivity);
+    return window.lumen.onActivity((items) => {
+      setActivity(items);
+      const newest = items[0];
+      if (!newest) return;
+      const slash = Math.max(newest.path.lastIndexOf("\\"), newest.path.lastIndexOf("/"));
+      if (slash <= 0) return;
+      void window.lumen.listDirectory(newest.path.slice(0, slash)).then((listing) => {
+        setFolder(listing.folder);
+        setItems(listing.items);
+      }).catch(() => undefined);
+    });
   }, []);
+
+  useEffect(() => {
+    void window.lumen.clipViews().then(setViews).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!playing) return;
+    void window.lumen.noteClipView(playing).then(setViews).catch(() => undefined);
+  }, [playing]);
 
   useEffect(() => {
     const off = window.lumen.onReplayStatus((next) => setReplayOn(next.armed));
@@ -347,6 +392,20 @@ export function OverlayApp() {
   }, [items, query, sort, editedOnly, favoritesOnly, favorites]);
   const order = useMemo(() => visible.map((item) => item.path), [visible]);
   const selection = useClipSelection(order);
+
+  function selectStale(): void {
+    const picked = staleClips(visible.map((item) => ({
+      path: item.path,
+      sizeBytes: item.sizeBytes,
+      mtimeMs: item.mtimeMs,
+      seenAt: views[favoriteKey(item.path)] ?? null,
+    })), Date.now());
+    selection.choose(picked.map((clip) => clip.path));
+    setConfirmDelete(false);
+    setNotice(picked.length === 0
+      ? "Nothing has gone unused for 3 weeks."
+      : `${picked.length} unused clips selected · ${formatBytes(bytesOf(picked))}.`);
+  }
   const active = items.find((item) => item.path === playing);
   const playIndex = active ? visible.findIndex((item) => item.path === active.path) : -1;
   const previousClip = playIndex > 0 ? visible[playIndex - 1] : null;
@@ -407,7 +466,14 @@ export function OverlayApp() {
             window.lumen.dragOverlay();
           }}
         >
-          <BrandMark className="brand-mark-svg" />
+          <button
+            type="button"
+            className="overlay-brand"
+            aria-label="Open Lumen"
+            onClick={() => { void window.lumen.showHome(); }}
+          >
+            <BrandMark className="brand-mark-svg" />
+          </button>
           <div className="folder-anchor">
             <button
               type="button"
@@ -631,6 +697,9 @@ export function OverlayApp() {
           <span className="overlay-count">
             {visible.length} {visible.length === 1 ? "clip" : "clips"}
           </span>
+          <button type="button" className="overlay-clean" onClick={selectStale}>
+            Clean up
+          </button>
           <DeleteClips
             count={selection.selected.length}
             pending={confirmDelete}
@@ -700,6 +769,12 @@ export function OverlayApp() {
               hasNext={Boolean(nextClip)}
               onPrevious={() => { if (previousClip) setPlaying(previousClip.path); }}
               onNext={() => { if (nextClip) setPlaying(nextClip.path); }}
+              onRenamed={(next) => {
+                setItems((current) => current.map((entry) => (
+                  entry.path === active.path ? next : entry
+                )));
+                setPlaying(next.path);
+              }}
             />}
           </div>
         ) : (

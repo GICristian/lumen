@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildFileMixSaveArgs, buildFileSaveArgs, buildMixSaveArgs, buildSaveArgs, concatLine,
   encodeVideoArgs, pictureBroken, replayFileName, segmentsToDrop, replayDimensions,
-  replayBuffer, replayTail, replayDisplay,
+  replayBuffer, replayTail, replayDisplay, resolveMicrophone,
 } from "./replay";
 
 describe("capture sizing and duration", () => {
@@ -21,6 +21,32 @@ describe("capture sizing and duration", () => {
     expect(replayDisplay("not-a-screen")).toBe("");
     expect(replayDisplay(4)).toBe("");
     expect(replayTail([{ duration: 4 }, { duration: 4 }, { duration: 1 }], 5)).toEqual([{ duration: 4 }, { duration: 1 }]);
+  });
+});
+
+describe("resolveMicrophone", () => {
+  const devices = [
+    { deviceId: "new-id", label: "Headset Microphone (Corsair)", kind: "audioinput" },
+    { deviceId: "default", label: "Default - Headset Microphone (Corsair)", kind: "audioinput" },
+    { deviceId: "cam", label: "Webcam", kind: "audioinput" },
+  ];
+
+  it("follows a saved label when Chromium replaces the device id", () => {
+    expect(resolveMicrophone(devices, "old-id", "Headset Microphone (Corsair)")).toEqual({
+      deviceId: "new-id",
+      label: "Headset Microphone (Corsair)",
+    });
+  });
+
+  it("keeps the saved id while that id is still listed", () => {
+    expect(resolveMicrophone(devices, "cam", "Webcam")).toEqual({
+      deviceId: "cam",
+      label: "Webcam",
+    });
+  });
+
+  it("does not switch to the system default when the saved microphone is missing", () => {
+    expect(resolveMicrophone(devices, "gone", "")).toEqual({ deviceId: "gone", label: "" });
   });
 });
 
@@ -63,9 +89,11 @@ describe("save", () => {
     expect(aheadText).toContain("adelay=40|40");
     expect(aheadText).not.toContain("anlms");
     expect(aheadText).toContain("normalize=0");
-    expect(aheadText).toContain("atrim=start=12.000");
-    expect(aheadText).toContain("atrim=start=11.960");
-    expect(aheadText).not.toContain("-ss");
+    expect(aheadText).toContain("-ss 12.000");
+    expect(aheadText).toContain("-ss 11.960");
+    expect(aheadText).not.toContain("atrim=start=12.000");
+    expect(aheadText).not.toContain("trim=start=");
+    expect(ahead[ahead.indexOf("-c:v") + 1]).toBe("copy");
     const behind = buildFileMixSaveArgs("v.webm", "m.webm", "out.mp4", false, 8, "libx264", 1, 1, 0, 0, -30);
     expect(behind.join(" ")).toContain("atrim=start=0.030");
     expect(behind.join(" ")).not.toContain("adelay=");
@@ -75,9 +103,16 @@ describe("save", () => {
     expect(shovedText).not.toContain("adelay=500");
     expect(shovedText).toContain("highpass=f=80");
     const straight = buildFileSaveArgs("in.webm", "out.mp4", true, 12, "libx264", 1.7, 1);
-    expect(straight).toContain("copy");
-    expect(straight).not.toContain("aac");
-    expect(straight.join(" ")).not.toContain("atrim");
+    const straightText = straight.join(" ");
+    expect(straightText).toContain("-ss 1.700");
+    expect(straightText).toContain("-c copy");
+    expect(straightText).not.toContain("trim=start=");
+    const trimmed = buildFileSaveArgs("in.webm", "out.mp4", false, 12, "libx264", 1.7, 1);
+    expect(trimmed.join(" ")).toContain("trim=start=1.700");
+    expect(trimmed.join(" ")).toContain("atrim=start=1.700");
+    const untouched = buildFileSaveArgs("in.webm", "out.mp4", true, 12, "libx264", 0, 1);
+    expect(untouched).toContain("copy");
+    expect(untouched).not.toContain("aac");
     const louder = buildFileSaveArgs("in.webm", "out.mp4", true, 12, "libx264", 0, 1.5);
     expect(louder.join(" ")).toContain("volume=1.500");
     expect(louder).toContain("aac");

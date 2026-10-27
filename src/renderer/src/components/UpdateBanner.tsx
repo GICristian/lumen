@@ -22,7 +22,10 @@ export function UpdateBanner() {
   const busy = state.phase === "downloading" || state.phase === "ready";
   return (
     <div className="update-banner" role="status">
-      <strong>{updateTitle(state)}</strong>
+      <div className="update-copy">
+        <strong>{updateTitle(state)}</strong>
+        {state.notes ? <p>{state.notes}</p> : <p>No notes were published with this release.</p>}
+      </div>
       <button
         type="button"
         className="export-btn"

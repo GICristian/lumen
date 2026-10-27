@@ -15,6 +15,9 @@ import {
   type ThemeMode,
 } from "@shared/theme";
 import { Icon } from "./Icon";
+import { SoundboardPanel } from "./SoundboardPanel";
+import { PerfPanel } from "./PerfPanel";
+import { ClickerPanel } from "./ClickerPanel";
 import { BrandMark } from "./BrandMark";
 
 const playerKeys = [
@@ -73,7 +76,9 @@ export function HubSettings({
   onLaunch,
   onReplay,
 }: Props) {
-  const [section, setSection] = useState<"appearance" | "controls" | "storage">("appearance");
+  const [section, setSection] = useState<
+    "appearance" | "controls" | "storage" | "plugins"
+  >("appearance");
   const [bind, setBind] = useState<Bind | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [themeNote, setThemeNote] = useState<string | null>(null);
@@ -160,6 +165,7 @@ export function HubSettings({
             ["appearance", "Appearance", "Your palette & atmosphere", "star"],
             ["controls", "Controls", "Shortcuts & behavior", "gear"],
             ["storage", "Storage", "Where your work lives", "folder"],
+            ["plugins", "Plugins", "Soundboard, macros, performance and clicking", "sliders"],
           ] as const).map(([id, label, note, icon]) => (
             <button key={id} type="button" aria-current={section === id ? "page" : undefined} onClick={() => { setBind(null); setSection(id); }}>
               <Icon name={icon} /><span><strong>{label}</strong><small>{note}</small></span><span aria-hidden="true">›</span>
@@ -170,7 +176,23 @@ export function HubSettings({
         <div className="settings-signature"><BrandMark /><span><strong>{look.name}</strong><small>{look.mode === "dark" ? "Dark" : "Light"} atmosphere · {MOTIF_LABELS[look.motif]}</small></span></div>
       </aside>
       <div className="settings-content" key={section}>
-      <header className="settings-page-heading"><div><span className="hub-kicker">{section === "appearance" ? "01 / PERSONALIZE" : section === "controls" ? "02 / INTERACT" : "03 / ORGANIZE"}</span><h2>{section === "appearance" ? "Your signature." : section === "controls" ? "At your fingertips." : "A place for every moment."}</h2></div><span className="settings-autosave"><i /> Changes save automatically</span></header>
+      <header className="settings-page-heading">
+        <div>
+          <span className="hub-kicker">
+            {section === "appearance" ? "01 / PERSONALIZE"
+              : section === "controls" ? "02 / INTERACT"
+                : section === "plugins" ? "04 / PLUGINS"
+                  : "03 / ORGANIZE"}
+          </span>
+          <h2>
+            {section === "appearance" ? "Your signature."
+              : section === "controls" ? "At your fingertips."
+                : section === "plugins" ? "Add what you need."
+                  : "A place for every moment."}
+          </h2>
+        </div>
+        <span className="settings-autosave"><i /> Changes save automatically</span>
+      </header>
       <div className="hub-panel is-settings">
       <section className="hub-sheet" hidden={section !== "controls"}>
         <span className="hub-kicker">Keybinds</span>
@@ -383,6 +405,9 @@ export function HubSettings({
           <strong>{launchOnStartup ? "On" : "Off"}</strong>
         </button>
       </section>
+      {section === "plugins" ? <SoundboardPanel /> : null}
+      {section === "plugins" ? <PerfPanel /> : null}
+      {section === "plugins" ? <ClickerPanel /> : null}
       <section className="hub-sheet" hidden={section !== "storage"}>
         <span className="hub-kicker">Export</span>
         <h2>Save destination</h2>

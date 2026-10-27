@@ -1,16 +1,16 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { ReplayScreen, ReplayStatus, Settings } from "@shared/contracts";
 import { acceleratorFromEvent } from "@shared/shortcut";
-import { replayBudget, replayBuffer, replayBitrate } from "@shared/replay";
+import { replayBudget, replayBuffer, replayBitrate, resolveMicrophone } from "@shared/replay";
 import { Icon } from "./Icon";
 import { BrandMark } from "./BrandMark";
 import { formatBytes } from "@shared/clips";
-import { audioLimiter, humFilter, microphoneConstraints } from "../player/replayAudio";
+import { audioLimiter, humFilter, openSavedMicrophone } from "../player/replayAudio";
 
-type Config = Pick<Settings, "replayAutoStart" | "replaySeconds" | "replayFps" | "replayHeight" | "replayMic" | "replayMicDeviceId" | "replayMicGain" | "replaySystemAudio" | "replaySystemGain" | "replayNoiseSuppression" | "replayEchoCancellation" | "replayMicHum" | "replayBitrateKbps" | "replayDisplayId">;
+type Config = Pick<Settings, "replayAutoStart" | "replaySeconds" | "replayFps" | "replayHeight" | "replayMic" | "replayMicDeviceId" | "replayMicLabel" | "replayMicGain" | "replaySystemAudio" | "replaySystemGain" | "replayNoiseSuppression" | "replayEchoCancellation" | "replayMicHum" | "replayBitrateKbps" | "replayDisplayId">;
 function configOf(status: ReplayStatus): Config {
   return { replayAutoStart: status.autoStart, replaySeconds: status.seconds, replayFps: status.fps, replayHeight: status.height, replayMic: status.mic,
-    replayMicDeviceId: status.micDeviceId, replayMicGain: status.micGain, replaySystemAudio: status.systemAudio,
+    replayMicDeviceId: status.micDeviceId, replayMicLabel: status.micLabel, replayMicGain: status.micGain, replaySystemAudio: status.systemAudio,
     replaySystemGain: status.systemGain, replayNoiseSuppression: status.noiseSuppression,
     replayEchoCancellation: status.echoCancellation, replayMicHum: status.micHum, replayBitrateKbps: status.bitrateKbps,
     replayDisplayId: status.displayId };
@@ -111,7 +111,7 @@ export function ReplayPanel({ compact = false }: { compact?: boolean }) {
   }, []);
   function edit(patch: Partial<Config>): void {
     if (draft && Object.entries(patch).every(([key, value]) => draft[key as keyof Config] === value)) return;
-    const voiceKeys = ["replayMic", "replayMicDeviceId", "replayNoiseSuppression", "replayEchoCancellation", "replayMicHum"];
+    const voiceKeys = ["replayMic", "replayMicDeviceId", "replayMicLabel", "replayNoiseSuppression", "replayEchoCancellation", "replayMicHum"];
     if (voiceKeys.some((key) => key in patch)) stopTest();
     if (patch.replayMicGain !== undefined && testGain.current) {
       testGain.current.gain.setTargetAtTime(patch.replayMicGain, testGain.current.context.currentTime, .015);
@@ -122,6 +122,19 @@ export function ReplayPanel({ compact = false }: { compact?: boolean }) {
     dirty.current = Object.keys(next).some(key => next[key as keyof Config] !== saved[key as keyof Config]);
     setChanged(dirty.current); setLocal(null); setDraft(next);
   }
+  function chooseMic(deviceId: string): void {
+    const device = devices.find((item) => item.deviceId === deviceId);
+    edit({ replayMicDeviceId: deviceId, replayMicLabel: device?.label ?? "" });
+  }
+
+  useEffect(() => {
+    if (!draft || dirty.current || !draft.replayMicDeviceId || devices.length === 0) return;
+    const resolved = resolveMicrophone(devices, draft.replayMicDeviceId, draft.replayMicLabel);
+    if (!resolved.label) return;
+    if (resolved.deviceId === draft.replayMicDeviceId && resolved.label === draft.replayMicLabel) return;
+    void window.lumen.replayRememberMic(resolved.deviceId, resolved.label);
+  }, [devices, draft]);
+
   async function refreshDevices(): Promise<void> {
     setEnumerating(true); setLocal(null);
     try {
@@ -140,9 +153,17 @@ export function ReplayPanel({ compact = false }: { compact?: boolean }) {
     let stream: MediaStream | null = null;
     let context: AudioContext | null = null;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: microphoneConstraints(
-        draft.replayMicDeviceId, draft.replayNoiseSuppression, draft.replayEchoCancellation,
-      ), video: false });
+      const opened = await openSavedMicrophone(
+        draft.replayMicDeviceId, draft.replayMicLabel,
+        draft.replayNoiseSuppression, draft.replayEchoCancellation,
+      );
+      stream = opened.stream;
+      if (
+        draft.replayMicDeviceId
+        && (opened.deviceId !== draft.replayMicDeviceId || opened.label !== draft.replayMicLabel)
+      ) {
+        void window.lumen.replayRememberMic(opened.deviceId, opened.label);
+      }
       if (token !== testGeneration.current) { stream.getTracks().forEach((track) => track.stop()); return; }
       context = new AudioContext({ latencyHint: "interactive" });
       const analyser = context.createAnalyser(); analyser.fftSize = 2048;
@@ -229,7 +250,7 @@ export function ReplayPanel({ compact = false }: { compact?: boolean }) {
             {tab === 'audio' ? <fieldset className="replay-fields" disabled={disabled}>
               <div className="replay-section-caption"><span>02 / AUDIO MIXER</span><span>Limiter protected</span></div>
               <section className="replay-channel"><label className="replay-toggle"><span>System audio<small>Stereo, as it plays. Voice is added only when the clip is saved.</small></span><input type="checkbox" checked={draft.replaySystemAudio} onChange={(event) => edit({ replaySystemAudio: event.target.checked })} /></label><label className="replay-gain"><span>System level</span><input type="range" min={0} max={2} step={.05} value={draft.replaySystemGain} disabled={!draft.replaySystemAudio} onChange={(event) => edit({ replaySystemGain: Number(event.target.value) })} /><output>{Math.round(draft.replaySystemGain * 100)}%</output></label></section>
-              <section className="replay-channel"><label className="replay-toggle"><span>Microphone<small>Your voice, mixed into the clip.</small></span><input type="checkbox" checked={draft.replayMic} onChange={(event) => edit({ replayMic: event.target.checked })} /></label><div className="replay-device"><select aria-label="Microphone device" disabled={!draft.replayMic} value={draft.replayMicDeviceId} onChange={(event) => edit({ replayMicDeviceId: event.target.value })}><option value="">System default microphone</option>{devices.filter(device => device.deviceId && device.deviceId !== 'default').map((device,index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Microphone ${index + 1}`}</option>)}{draft.replayMicDeviceId && !devices.some(device => device.deviceId === draft.replayMicDeviceId) ? <option value={draft.replayMicDeviceId}>Selected microphone · unavailable</option> : null}</select><button type="button" className="text-btn" disabled={enumerating} onClick={() => void refreshDevices()}>{enumerating ? 'Refreshing…' : 'Refresh'}</button></div><label className="replay-gain"><span>Mic level</span><input aria-label="Microphone level" type="range" min={0} max={2} step={.05} value={draft.replayMicGain} disabled={!draft.replayMic} onChange={(event) => edit({ replayMicGain: Number(event.target.value) })} /><output>{Math.round(draft.replayMicGain * 100)}%</output></label><div className={`replay-mic-test${testing ? ' is-testing' : ''}`}>
+              <section className="replay-channel"><label className="replay-toggle"><span>Microphone<small>Your voice, mixed into the clip.</small></span><input type="checkbox" checked={draft.replayMic} onChange={(event) => edit({ replayMic: event.target.checked })} /></label><div className="replay-device"><select aria-label="Microphone device" disabled={!draft.replayMic} value={draft.replayMicDeviceId} onChange={(event) => chooseMic(event.target.value)}><option value="">System default microphone</option>{devices.filter(device => device.deviceId && device.deviceId !== 'default').map((device,index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Microphone ${index + 1}`}</option>)}{draft.replayMicDeviceId && !devices.some(device => device.deviceId === draft.replayMicDeviceId) ? <option value={draft.replayMicDeviceId}>Selected microphone · unavailable</option> : null}</select><button type="button" className="text-btn" disabled={enumerating} onClick={() => void refreshDevices()}>{enumerating ? 'Refreshing…' : 'Refresh'}</button></div><label className="replay-gain"><span>Mic level</span><input aria-label="Microphone level" type="range" min={0} max={2} step={.05} value={draft.replayMicGain} disabled={!draft.replayMic} onChange={(event) => edit({ replayMicGain: Number(event.target.value) })} /><output>{Math.round(draft.replayMicGain * 100)}%</output></label><div className={`replay-mic-test${testing ? ' is-testing' : ''}`}>
                 <div className="replay-mic-test-header"><span>LIVE MIC MONITOR</span><button type="button" className="replay-test-button" disabled={!draft.replayMic} aria-pressed={testing} onClick={() => void testMic()}><i />{testing ? 'Stop test' : 'Start test'}</button></div>
                 <div className={`replay-mic-meter${testing && peakDb > -3 ? ' is-hot' : ''}`}><meter min={0} max={1} value={level} aria-label="Microphone signal level" /><output>{testing && !testStarting ? peakDb <= -60 ? '-inf dB' : `${Math.round(peakDb)} dB` : '-- dB'}</output></div>
                 <div className="replay-mic-scale" aria-hidden="true"><span>-60</span><span>-30</span><span>-12</span><span>0 dB</span></div>

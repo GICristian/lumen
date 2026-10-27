@@ -310,14 +310,39 @@ function paintRecordDot(icon: NativeImage): NativeImage {
   return nativeImage.createFromBitmap(bitmap, { width, height });
 }
 
+let macroToggle: (() => void) | null = null;
+let macroEditor: (() => void) | null = null;
+
 function trayMenu(): Menu {
+  const settings = getSettings();
   const items: Electron.MenuItemConstructorOptions[] = [
     { label: "Open Lumen", click: () => openPlayer() },
     { label: "Open overlay", click: () => showOverlay() },
+    { label: "Edit macros", click: () => macroEditor?.() },
   ];
+  if (settings.macroEnabled) {
+    items.push({
+      label: settings.macroLive ? "Macro: On" : "Macro: Off",
+      click: () => macroToggle?.(),
+    });
+  }
   if (trayRecording) items.push({ label: "Recording", enabled: false });
   items.push({ type: "separator" }, { label: "Quit", click: () => app.quit() });
   return Menu.buildFromTemplate(items);
+}
+
+export function refreshTrayMenu(): void {
+  tray?.setContextMenu(trayMenu());
+}
+
+export function bindMacroToggle(toggle: () => void): void {
+  macroToggle = toggle;
+  refreshTrayMenu();
+}
+
+export function bindMacroEditor(open: () => void): void {
+  macroEditor = open;
+  refreshTrayMenu();
 }
 
 export function setTrayTooltip(text: string): void {

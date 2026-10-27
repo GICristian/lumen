@@ -1,5 +1,6 @@
 import koffi from "koffi";
 import { coversDisplay, type PixelDisplay } from "@shared/displayCover";
+import { parseRawMouse, type KeyChord, type RawMouseMove } from "@shared/plugins";
 
 const user32 = koffi.load("user32.dll");
 const kernel32 = koffi.load("kernel32.dll");
@@ -56,6 +57,7 @@ const getClassName = user32.func(
 const getWindowRect = user32.func("bool __stdcall GetWindowRect(void* hWnd, _Out_ LumenRect* rect)");
 const clipCursor = user32.func("bool __stdcall ClipCursor(_In_ LumenRect* rect)");
 const getCursorPos = user32.func("bool __stdcall GetCursorPos(_Out_ LumenPoint* point)");
+const getAsyncKeyState = user32.func("int16 __stdcall GetAsyncKeyState(int key)");
 const setCursorPos = user32.func("bool __stdcall SetCursorPos(int x, int y)");
 const showCursor = user32.func("int __stdcall ShowCursor(int show)");
 const attachThreadInput = user32.func(
@@ -89,6 +91,16 @@ const rawDeviceType = koffi.struct("LumenRawDevice", {
 });
 const registerRawInput = user32.func(
   "bool __stdcall RegisterRawInputDevices(_In_ LumenRawDevice* devices, uint32 count, uint32 size)",
+);
+const rawHeaderType = koffi.struct("LumenRawHeader", {
+  type: "uint32",
+  size: "uint32",
+  device: "uintptr_t",
+  param: "uintptr_t",
+});
+const getRawInputData = user32.func(
+  "uint32 __stdcall GetRawInputData(void* raw, uint32 command, "
+  + "_Out_ uint8* data, _Inout_ uint32* size, uint32 header)",
 );
 const hookInfoType = koffi.struct("LumenMouseHook", {
   x: "int32",
@@ -132,7 +144,9 @@ const WM_MBUTTONUP = 0x0208;
 const WM_MOUSEWHEEL = 0x020a;
 const RIDEV_REMOVE = 0x00000001;
 const RIDEV_NOLEGACY = 0x00000030;
+const RIDEV_INPUTSINK = 0x00000100;
 const RIDEV_CAPTUREMOUSE = 0x00000200;
+const RID_INPUT = 0x10000003;
 const LLMHF_INJECTED = 0x00000001;
 
 type MouseButton = "left" | "right" | "middle";
@@ -155,6 +169,9 @@ let mouseQueue: CapturedMouse[] = [];
 let mouseQueued = false;
 let grab: { frozenX: number; frozenY: number; x: number; y: number } | null = null;
 let osCursorHidden = false;
+let rawSinkHwnd: bigint | null = null;
+let rawReadLogged = false;
+const rawPacket = new Uint8Array(80);
 
 function hideOsCursor(): void {
   if (osCursorHidden) return;
@@ -198,6 +215,13 @@ export function noteForeground(except: bigint[]): void {
 
 export function currentForeground(): bigint {
   return asHwnd(getForegroundWindow());
+}
+
+/** Physical screen rectangle of whatever is in front, or null when there is none. */
+export function foregroundFrame(): Rect | null {
+  const hwnd = asHwnd(getForegroundWindow());
+  if (hwnd === 0n) return null;
+  return windowRect(hwnd);
 }
 
 export function savedForeground(): bigint | null {
@@ -416,6 +440,51 @@ export function isResizeEdge(hwnd: bigint, x: number, y: number): boolean {
   );
 }
 
+function registerMouseSink(hwnd: bigint | null, flags: number): boolean {
+  return Boolean(registerRawInput(
+    { usagePage: 0x01, usage: 0x02, flags, target: hwnd },
+    1,
+    koffi.sizeof(rawDeviceType),
+  ));
+}
+
+/** Observe mouse movement even when the cursor is locked by another program. */
+export function rawMouseOwner(): bigint | null {
+  return rawSinkHwnd;
+}
+
+export function armRawMouse(hwnd: bigint): boolean {
+  if (hwnd === 0n) return false;
+  rawSinkHwnd = hwnd;
+  return registerMouseSink(hwnd, RIDEV_INPUTSINK);
+}
+
+export function disarmRawMouse(): void {
+  rawSinkHwnd = null;
+  registerMouseSink(null, RIDEV_REMOVE);
+}
+
+/** Reads one raw packet. The handle is only valid inside the window message. */
+export function readRawMouse(handle: bigint): RawMouseMove | null {
+  if (handle === 0n) return null;
+  const size = [rawPacket.length];
+  const got = Number(getRawInputData(
+    handle,
+    RID_INPUT,
+    rawPacket,
+    size,
+    koffi.sizeof(rawHeaderType),
+  ));
+  if (!Number.isFinite(got) || got < 16 || got > rawPacket.length) {
+    if (!rawReadLogged) {
+      rawReadLogged = true;
+      console.error("soundboard raw mouse", got);
+    }
+    return null;
+  }
+  return parseRawMouse(rawPacket.subarray(0, got), koffi.sizeof(rawHeaderType));
+}
+
 export function captureRawMouse(hwnd: bigint): boolean {
   const registered = registerRawInput(
     {
@@ -431,11 +500,11 @@ export function captureRawMouse(hwnd: bigint): boolean {
 }
 
 export function releaseRawMouse(): void {
-  registerRawInput(
-    { usagePage: 0x01, usage: 0x02, flags: RIDEV_REMOVE, target: null },
-    1,
-    koffi.sizeof(rawDeviceType),
-  );
+  if (rawSinkHwnd) {
+    registerMouseSink(rawSinkHwnd, RIDEV_INPUTSINK);
+    return;
+  }
+  registerMouseSink(null, RIDEV_REMOVE);
 }
 
 function wheelDelta(mouseData: number): number {
@@ -544,8 +613,104 @@ export function setMouseSink(
   mouseHook = handle;
 }
 
+const keyInfoType = koffi.struct("LumenKeyHook", {
+  vkCode: "uint32",
+  scanCode: "uint32",
+  flags: "uint32",
+  time: "uint32",
+  extra: "uintptr_t",
+});
+
+const WH_KEYBOARD_LL = 13;
+const LLKHF_UP = 0x80;
+const VK_SHIFT = 0x10;
+const VK_CONTROL = 0x11;
+const VK_MENU = 0x12;
+
+let keyHook: bigint | null = null;
+let keyProc: bigint | null = null;
+let chord: KeyChord | null = null;
+let held = false;
+let keyDownSink: (() => void) | null = null;
+let keyUpSink: (() => void) | null = null;
+
+function modifierDown(vk: number): boolean {
+  return (Number(getAsyncKeyState(vk)) & 0x8000) !== 0;
+}
+
+function chordDown(vk: number): boolean {
+  if (!chord || vk !== chord.vk) return false;
+  return modifierDown(VK_CONTROL) === chord.ctrl
+    && modifierDown(VK_MENU) === chord.alt
+    && modifierDown(VK_SHIFT) === chord.shift;
+}
+
+export function ownWindowFocused(): boolean {
+  try {
+    const hwnd = asHwnd(getForegroundWindow());
+    if (hwnd === 0n) return false;
+    const pid = [0];
+    getWindowThreadProcessId(hwnd, pid);
+    return pid[0] === process.pid;
+  } catch {
+    return false;
+  }
+}
+
+function onKeyHook(nCode: number, wParam: bigint, lParam: bigint): bigint {
+  if (nCode < 0 || !chord) return nextHook(nCode, wParam, lParam);
+  try {
+    const info = koffi.decode(lParam, keyInfoType) as { vkCode: number; flags: number };
+    if ((info.flags & 0x12) !== 0) return nextHook(nCode, wParam, lParam);
+    if (!chordDown(info.vkCode)) return nextHook(nCode, wParam, lParam);
+    const up = (info.flags & LLKHF_UP) !== 0;
+    if (up) {
+      if (held) {
+        held = false;
+        const release = keyUpSink;
+        setImmediate(() => release?.());
+      }
+    } else if (!held) {
+      held = true;
+      const press = keyDownSink;
+      setImmediate(() => press?.());
+    }
+    return 1n;
+  } catch (error) {
+    console.error("key hook", error);
+    return nextHook(nCode, wParam, lParam);
+  }
+}
+
+/** Hold detection for one chord. The hook is removed when the chord is cleared. */
+export function watchChord(
+  next: KeyChord | null,
+  down: () => void,
+  up: () => void,
+): void {
+  chord = next;
+  keyDownSink = down;
+  keyUpSink = up;
+  held = false;
+  if (!next) {
+    if (keyHook) unhookWindowsHookEx(keyHook);
+    keyHook = null;
+    return;
+  }
+  if (keyHook) return;
+  if (!keyProc) keyProc = koffi.register(onKeyHook, koffi.pointer(hookProto));
+  const handle = asHwnd(setWindowsHookEx(WH_KEYBOARD_LL, keyProc, null, 0));
+  if (handle === 0n) {
+    console.error("soundboard key hook was not installed");
+    return;
+  }
+  keyHook = handle;
+}
+
 void rectType;
 void pointType;
 void hookInfoType;
 void hookProto;
 void rawDeviceType;
+void rawHeaderType;
+void keyInfoType;

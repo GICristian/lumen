@@ -31,6 +31,11 @@ export function ScreenshotSelect() {
   const [draft, setDraft] = useState<Stroke | null>(null);
   const draftRef = useRef<Stroke | null>(null);
   const drag = useRef<{ x: number; y: number; box: Box | null; move: boolean } | null>(null);
+  const closing = useRef(false);
+  const session = useRef(0);
+  const overTools = useRef(false);
+  const [dragging, setDragging] = useState(false);
+  const [aim, setAim] = useState<Point | null>(null);
   const state = useRef({ box, strokes, color, tool });
   state.current = { box, strokes, color, tool };
 
@@ -56,12 +61,85 @@ export function ScreenshotSelect() {
       draftRef.current = null;
       setNote("");
       setTool("select");
+      setDragging(false);
+      drag.current = null;
+      overTools.current = false;
+      setAim(null);
+      closing.current = false;
+      session.current += 1;
+    });
+    const pointer = window.lumen.onScreenshotPointer((event) => {
+      const at = { x: event.x, y: event.y };
+      setAim(at);
+      if (event.phase === "down") {
+        const button = toolButton(at);
+        if (button) {
+          overTools.current = true;
+          return;
+        }
+        overTools.current = false;
+        const current = state.current;
+        const region = current.box;
+        const inside = Boolean(
+          region
+          && at.x >= region.x
+          && at.x <= region.x + region.w
+          && at.y >= region.y
+          && at.y <= region.y + region.h,
+        );
+        if ((current.tool === "pen" || current.tool === "box") && region && inside) {
+          const next: Stroke = {
+            kind: current.tool,
+            color: current.color,
+            points: [{ x: at.x - region.x, y: at.y - region.y }],
+          };
+          draftRef.current = next;
+          setDraft(next);
+          return;
+        }
+        begin(at);
+        return;
+      }
+      if (event.phase === "up") {
+        if (overTools.current) {
+          overTools.current = false;
+          toolButton(at)?.click();
+          return;
+        }
+        const mark = draftRef.current;
+        if (mark) {
+          draftRef.current = null;
+          setDraft(null);
+          if (mark.points.length >= 2) setStrokes((items) => [...items, mark]);
+          return;
+        }
+        drag.current = null;
+        setDragging(false);
+        return;
+      }
+      const current = state.current;
+      const ink = draftRef.current;
+      if (ink && current.box) {
+        const spot = { x: at.x - current.box.x, y: at.y - current.box.y };
+        const next = ink.kind === "box"
+          ? { ...ink, points: [ink.points[0], spot] }
+          : (() => {
+            const last = ink.points[ink.points.length - 1];
+            if (last && Math.hypot(spot.x - last.x, spot.y - last.y) < 1.5) return ink;
+            return { ...ink, points: [...ink.points, spot] };
+          })();
+        draftRef.current = next;
+        setDraft(next);
+        return;
+      }
+      place(at);
     });
     return () => {
       gone = true;
       stop();
       reset();
       command();
+      pointer();
     };
   }, []);
 
@@ -82,9 +160,12 @@ export function ScreenshotSelect() {
         void finish(true, current.box, current.strokes);
         return;
       }
-      const save = event.key === "Enter"
-        || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s");
-      if (save) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void finish(true, current.box, current.strokes);
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
         void finish(false, current.box, current.strokes);
       }
@@ -93,16 +174,82 @@ export function ScreenshotSelect() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  function point(event: { clientX: number; clientY: number }): Point {
-    return { x: event.clientX, y: event.clientY };
+  function toolButton(at: Point): HTMLButtonElement | null {
+    const tools = document.querySelector(".shot-tools");
+    if (!tools) return null;
+    const buttons = tools.querySelectorAll("button");
+    for (const button of buttons) {
+      const rect = button.getBoundingClientRect();
+      const hit = at.x >= rect.left && at.x <= rect.right && at.y >= rect.top && at.y <= rect.bottom;
+      if (hit) return button;
+    }
+    return null;
+  }
+
+  function begin(at: Point): void {
+    if (state.current.tool !== "select") return;
+    const region = state.current.box;
+    const inside = Boolean(
+      region
+      && at.x >= region.x
+      && at.x <= region.x + region.w
+      && at.y >= region.y
+      && at.y <= region.y + region.h,
+    );
+    drag.current = { x: at.x, y: at.y, box: region, move: inside };
+    setDragging(true);
+  }
+
+  function place(at: Point): void {
+    const current = drag.current;
+    if (!current) return;
+    if (current.move && current.box) {
+      setBox({
+        x: current.box.x + at.x - current.x,
+        y: current.box.y + at.y - current.y,
+        w: current.box.w,
+        h: current.box.h,
+      });
+      return;
+    }
+    setBox(normalize(current.x, current.y, at.x, at.y));
+  }
+
+  function loadedImage(): HTMLImageElement | null {
+    const image = imageRef.current;
+    if (!image || !image.complete || !image.naturalWidth) return null;
+    return image;
+  }
+
+  function waitForImage(): Promise<HTMLImageElement | null> {
+    const found = loadedImage();
+    if (found) return Promise.resolve(found);
+    return new Promise((resolve) => {
+      const started = Date.now();
+      const timer = window.setInterval(() => {
+        const image = loadedImage();
+        if (image || Date.now() - started > 2500) {
+          window.clearInterval(timer);
+          resolve(image);
+        }
+      }, 40);
+    });
   }
 
   async function finish(copy: boolean, region: Box | null, marks: Stroke[]): Promise<void> {
-    const image = imageRef.current;
-    if (!image || !region || region.w < 8 || region.h < 8) return;
-    if (!image.naturalWidth || !image.clientWidth) return;
-    const scaleX = image.naturalWidth / image.clientWidth;
-    const scaleY = image.naturalHeight / image.clientHeight;
+    if (closing.current || !region || region.w < 8 || region.h < 8) return;
+    closing.current = true;
+    const mine = session.current;
+    const ink = marks.map((stroke) => ({
+      ...stroke,
+      points: stroke.points.map((spot) => ({ ...spot })),
+    }));
+    const view = { w: window.innerWidth, h: window.innerHeight };
+    window.lumen.closeScreenshot();
+    const image = await waitForImage();
+    if (!image || session.current !== mine || view.w < 1 || view.h < 1) return;
+    const scaleX = image.naturalWidth / view.w;
+    const scaleY = image.naturalHeight / view.h;
     const canvas = document.createElement("canvas");
     canvas.width = Math.max(1, Math.round(region.w * scaleX));
     canvas.height = Math.max(1, Math.round(region.h * scaleY));
@@ -121,7 +268,7 @@ export function ScreenshotSelect() {
     );
     context.lineCap = "round";
     context.lineJoin = "round";
-    for (const stroke of marks) {
+    for (const stroke of ink) {
       context.strokeStyle = stroke.color;
       context.lineWidth = 3 * scaleX;
       context.beginPath();
@@ -147,13 +294,8 @@ export function ScreenshotSelect() {
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
     if (!blob) return;
     const bytes = new Uint8Array(await blob.arrayBuffer());
-    window.lumen.closeScreenshot();
     if (copy) void window.lumen.copyScreenshot(bytes);
     else void window.lumen.saveScreenshot(bytes);
-  }
-
-  function local(event: { clientX: number; clientY: number }, region: Box): Point {
-    return { x: event.clientX - region.x, y: event.clientY - region.y };
   }
 
   const ready = box && box.w > 8 && box.h > 8;
@@ -163,36 +305,19 @@ export function ScreenshotSelect() {
   const drawn = draft ? [...strokes, draft] : strokes;
 
   return (
-    <main
-      className="shot-stage"
-      onPointerDown={(event) => {
-        if (state.current.tool !== "select") return;
-        const at = point(event);
-        const inside = Boolean(
-          box && at.x >= box.x && at.x <= box.x + box.w && at.y >= box.y && at.y <= box.y + box.h,
-        );
-        drag.current = { x: at.x, y: at.y, box, move: Boolean(inside) };
-        event.currentTarget.setPointerCapture(event.pointerId);
-      }}
-      onPointerMove={(event) => {
-        const current = drag.current;
-        if (!current) return;
-        const at = point(event);
-        if (current.move && current.box) {
-          setBox({
-            x: current.box.x + at.x - current.x,
-            y: current.box.y + at.y - current.y,
-            w: current.box.w,
-            h: current.box.h,
-          });
-          return;
-        }
-        setBox(normalize(current.x, current.y, at.x, at.y));
-      }}
-      onPointerUp={() => { drag.current = null; }}
-    >
+    <main className="shot-stage">
       {url ? <img ref={imageRef} src={url} alt="" draggable={false} /> : null}
-      {box ? null : <div className="shot-dim" />}
+      {box && box.w > 2 && box.h > 2 ? (
+        <>
+          <div className="shot-shade" style={{ left: 0, top: 0, right: 0, height: box.y }} />
+          <div className="shot-shade" style={{ left: 0, top: box.y, width: box.x, height: box.h }} />
+          <div
+            className="shot-shade"
+            style={{ left: box.x + box.w, top: box.y, right: 0, height: box.h }}
+          />
+          <div className="shot-shade" style={{ left: 0, top: box.y + box.h, right: 0, bottom: 0 }} />
+        </>
+      ) : <div className="shot-dim" />}
       {box && box.w > 2 && box.h > 2 ? (
         <div
           className="shot-hole"
@@ -200,39 +325,8 @@ export function ScreenshotSelect() {
         >
           <span>{Math.round(box.w)} × {Math.round(box.h)}</span>
           <svg
-            className={tool === "select" ? "shot-draw" : "shot-draw is-ink"}
+            className="shot-draw"
             viewBox={`0 0 ${box.w} ${box.h}`}
-            onPointerDown={(event) => {
-              if (tool === "select" || !box) return;
-              event.stopPropagation();
-              event.currentTarget.setPointerCapture(event.pointerId);
-              const next = { kind: tool, color, points: [local(event, box)] };
-              draftRef.current = next;
-              setDraft(next);
-            }}
-            onPointerMove={(event) => {
-              if (!draft || !box) return;
-              const spot = local(event, box);
-              setDraft((current) => {
-                if (!current) return current;
-                const next = current.kind === "box"
-                  ? { ...current, points: [current.points[0], spot] }
-                  : (() => {
-                    const last = current.points[current.points.length - 1];
-                    if (last && Math.hypot(spot.x - last.x, spot.y - last.y) < 1.5) return current;
-                    return { ...current, points: [...current.points, spot] };
-                  })();
-                draftRef.current = next;
-                return next;
-              });
-            }}
-            onPointerUp={() => {
-              const mark = draftRef.current;
-              draftRef.current = null;
-              setDraft(null);
-              if (!mark || mark.points.length < 2) return;
-              setStrokes((items) => [...items, mark]);
-            }}
           >
             {drawn.map((stroke, index) => (
               stroke.kind === "box" && stroke.points.length > 1 ? (
@@ -259,22 +353,19 @@ export function ScreenshotSelect() {
           </svg>
         </div>
       ) : null}
-      {ready && box ? (
+      {ready && box && !dragging ? (
         <div
           className="shot-tools"
           style={{ left: box.x, top: toolsTop }}
-          onPointerDown={(event) => event.stopPropagation()}
         >
-          <button type="button" className={tool === "select" ? "is-on" : ""} onClick={() => setTool("select")}>
-            Move
+          <button type="button" className="shot-primary" onClick={() => void finish(true, box, strokes)}>
+            Copy
           </button>
-          <button type="button" className={tool === "pen" ? "is-on" : ""} onClick={() => setTool("pen")}>
+          <button type="button" onClick={() => void finish(false, box, strokes)}>Save</button>
+          <button type="button" className={tool === "pen" ? "is-on" : ""} onClick={() => setTool(tool === "pen" ? "select" : "pen")}>
             Draw
           </button>
-          <button type="button" className={tool === "box" ? "is-on" : ""} onClick={() => setTool("box")}>
-            Box
-          </button>
-          {COLORS.map((swatch) => (
+          {tool === "pen" ? COLORS.map((swatch) => (
             <button
               key={swatch}
               type="button"
@@ -283,16 +374,12 @@ export function ScreenshotSelect() {
               aria-label={`Ink ${swatch}`}
               onClick={() => setColor(swatch)}
             />
-          ))}
-          <button type="button" className="shot-primary" onClick={() => void finish(false, box, strokes)}>
-            Save
-          </button>
-          <button type="button" onClick={() => void finish(true, box, strokes)}>Copy</button>
-          <button type="button" onClick={() => window.lumen.closeScreenshot()}>Cancel</button>
+          )) : null}
+          <button type="button" onClick={() => window.lumen.closeScreenshot()}>Close</button>
         </div>
-      ) : (
-        <p className="shot-hint">{note || (url ? "Drag to select a region" : "Capturing the screen")}</p>
-      )}
+      ) : null}
+      {aim ? <div className="shot-cursor" style={{ left: aim.x, top: aim.y }} /> : null}
+      {note ? <p className="shot-hint">{note}</p> : null}
     </main>
   );
 }

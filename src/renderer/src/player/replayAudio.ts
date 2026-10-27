@@ -1,3 +1,5 @@
+import { resolveMicrophone } from "@shared/replay";
+
 /** Loopback must be opened as stereo music. A bare `audio: true` is a voice mic. */
 export function systemAudioConstraints(): MediaTrackConstraints {
   return {
@@ -37,6 +39,60 @@ export async function releaseSystemProcessing(track: MediaStreamTrack): Promise<
     // A mono endpoint cannot be widened; the request already asked for stereo.
   }
   track.contentHint = "music";
+}
+
+async function audioInputs(): Promise<MediaDeviceInfo[]> {
+  const listed = await navigator.mediaDevices.enumerateDevices();
+  return listed.filter((item) => item.kind === "audioinput");
+}
+
+function identified(
+  stream: MediaStream,
+  devices: MediaDeviceInfo[],
+  chosen: { deviceId: string; label: string },
+): { stream: MediaStream; deviceId: string; label: string } {
+  const trackId = stream.getAudioTracks()[0]?.getSettings().deviceId || chosen.deviceId;
+  const named = devices.find((device) => device.deviceId === trackId);
+  return {
+    stream,
+    deviceId: trackId,
+    label: named?.label.trim() || chosen.label,
+  };
+}
+
+/**
+ * Opens the saved microphone. A changed Chromium id is followed by the saved label
+ * instead of falling back to whichever device is the new default.
+ */
+export async function openSavedMicrophone(
+  deviceId: string,
+  label: string,
+  noiseSuppression: boolean,
+  echoCancellation: boolean,
+): Promise<{ stream: MediaStream; deviceId: string; label: string }> {
+  const open = (id: string): Promise<MediaStream> => navigator.mediaDevices.getUserMedia({
+    audio: microphoneConstraints(id, noiseSuppression, echoCancellation),
+    video: false,
+  });
+  let devices = await audioInputs().catch(() => [] as MediaDeviceInfo[]);
+  let chosen = resolveMicrophone(devices, deviceId, label);
+  try {
+    return identified(await open(chosen.deviceId), devices, chosen);
+  } catch (error) {
+    if (!label.trim()) throw error;
+    let probe: MediaStream | null = null;
+    try {
+      probe = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    } catch {
+      throw error;
+    } finally {
+      probe?.getTracks().forEach((track) => track.stop());
+    }
+    devices = await audioInputs().catch(() => devices);
+    chosen = resolveMicrophone(devices, deviceId, label);
+    if (!chosen.deviceId || chosen.deviceId === deviceId) throw error;
+    return identified(await open(chosen.deviceId), devices, chosen);
+  }
 }
 
 /** Cut mains hum and its first harmonic. Voice stays; the buzz does not. */

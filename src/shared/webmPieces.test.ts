@@ -4,7 +4,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import ffmpeg from "ffmpeg-static";
-import { clusterStartSeconds, findClusterOffset, firstKeyframeSeconds, firstSampleSeconds, sharedMediaStart, splitWebmChunk, timecodeScaleNs } from "./webmPieces";
+import { clusterStartSeconds, findClusterOffset, firstKeyframeSeconds, firstSampleSeconds, openingHoldSeconds, sharedMediaStart, splitWebmChunk, timecodeScaleNs } from "./webmPieces";
 
 describe("webm pieces", () => {
   it("seeks both files from the first sample, not the older cluster base", () => {
@@ -29,6 +29,17 @@ describe("webm pieces", () => {
     ]);
     expect(firstSampleSeconds(cluster)).toBe(10);
     expect(firstKeyframeSeconds(cluster)).toBe(11.7);
+    expect(openingHoldSeconds(cluster)).toBe(0);
+  });
+
+  it("measures a frozen first picture that sits for more than a third of a second", () => {
+    const cluster = new Uint8Array([
+      0x1F, 0x43, 0xB6, 0x75, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+      0xE7, 0x81, 0x00,
+      0xA3, 0x89, 0x81, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x01, 0x65,
+      0xA3, 0x89, 0x81, 0x05, 0xDC, 0x80, 0x00, 0x00, 0x00, 0x01, 0x65,
+    ]);
+    expect(openingHoldSeconds(cluster)).toBeCloseTo(1.5);
   });
 
   it("reads a cluster timecode without scanning the media", () => {

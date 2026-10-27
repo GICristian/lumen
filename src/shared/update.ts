@@ -6,6 +6,7 @@ export const idleUpdate: UpdateState = {
   percent: 0,
   dismissed: false,
   message: null,
+  notes: null,
 };
 
 /** The notice stays until the user closes an available release. */

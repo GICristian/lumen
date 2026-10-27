@@ -17,11 +17,26 @@ import {
   startSequence,
   thumbnail,
 } from "./ffmpeg";
-import { deleteVideos, listDirectory, listFolder, videoArg } from "./library";
-import { forgetFavoritePaths, listFavorites, toggleFavoritePath } from "./favorites";
-import { listActivity, recordActivity } from "./activity";
+import { deleteVideos, listDirectory, listFolder, renameVideo, videoArg } from "./library";
+import { forgetFavoritePaths, listFavorites, retargetFavorite, toggleFavoritePath } from "./favorites";
+import { listActivity, recordActivity, retargetActivity } from "./activity";
 import { listLumenFolders, lumenReplayRoot } from "./lumenFolders";
 import { closeScreenshot, copyScreenshot, saveScreenshot, screenshotFrame } from "./screenshotHost";
+import { openSoundboardFolder, soundboardLibrary } from "./soundboardHost";
+import {
+  macroDocument,
+  macroLibrary,
+  macroWindow,
+  exportMacroFile,
+  importMacroFile,
+  openMacroEditor,
+  saveMacroDocument,
+  setMacroEnabled,
+  setMacroLive,
+} from "./macroHost";
+import { clipViews, noteClipView } from "./clipViews";
+import { restoreDiscordInput } from "./discordRoute";
+import { installVoiceCable } from "./voiceCable";
 import {
   applyLaunchOnStartup,
   beginOverlayDrag,
@@ -227,6 +242,19 @@ export function registerIpc(
     return deleteVideos(paths.filter((item) => typeof item === "string"));
   });
 
+  ipcMain.handle("library:rename", async (_event, filePath: unknown, title: unknown) => {
+    if (typeof filePath !== "string" || typeof title !== "string") {
+      throw new Error("Clip could not be renamed");
+    }
+    if (isVaultPath(filePath)) throw new Error("Vault clips stay inside the vault");
+    const item = await renameVideo(filePath, title);
+    if (item.path !== filePath) {
+      await retargetFavorite(filePath, item.path);
+      await retargetActivity(filePath, item.path);
+    }
+    return item;
+  });
+
   ipcMain.handle("library:folder", async (_event, folderPath: string) => {
     const listing = await listDirectory(folderPath);
     await remember(listing.folder);
@@ -294,6 +322,28 @@ export function registerIpc(
       : []));
 
   ipcMain.handle("settings:set", (_event, patch: Partial<Settings>) => patchSettings(patch));
+  ipcMain.handle("soundboard:sounds", () => soundboardLibrary());
+  ipcMain.handle("soundboard:folder", () => openSoundboardFolder());
+  ipcMain.handle("soundboard:install-cable", () => installVoiceCable());
+  ipcMain.handle("soundboard:voice-route", (_event, active: unknown) => {
+    if (active !== true) restoreDiscordInput();
+    return Promise.resolve();
+  });
+  ipcMain.handle("macro:library", () => macroLibrary());
+  ipcMain.handle("macro:enabled", (_event, enabled: unknown) => setMacroEnabled(enabled === true));
+  ipcMain.handle("macro:live", (_event, live: unknown) => setMacroLive(live === true));
+  ipcMain.handle("macro:open", () => openMacroEditor());
+  ipcMain.handle("macro:document", () => macroDocument());
+  ipcMain.handle("macro:save", (_event, value: unknown) => saveMacroDocument(value));
+  ipcMain.handle("macro:import", () => importMacroFile());
+  ipcMain.handle("macro:export", () => exportMacroFile());
+  ipcMain.handle("macro:window", (_event, action: unknown) => {
+    const next = action === "minimize" || action === "maximize" ? action : "close";
+    macroWindow(next);
+  });
+  ipcMain.handle("clips:views", () => clipViews());
+  ipcMain.handle("clips:seen", (_event, filePath: unknown) =>
+    noteClipView(typeof filePath === "string" ? filePath : ""));
 
   ipcMain.handle("shell:showItem", (event, filePath: string) => {
     // Explorer must be visible above the app we are currently overlaying.

@@ -4,7 +4,7 @@ import { REPLAY_SEGMENT_SECONDS, replayDimensions } from "@shared/replay";
 import { splitWebmChunk } from "@shared/webmPieces";
 import {
   humFilter,
-  microphoneConstraints,
+  openSavedMicrophone,
   releaseSystemProcessing,
   systemAudioConstraints,
 } from "../player/replayAudio";
@@ -201,12 +201,19 @@ export function ReplayCapture() {
         let voiceTrack: MediaStreamTrack | undefined;
         if (options.mic) {
           try {
-            mic = await navigator.mediaDevices.getUserMedia({
-              audio: microphoneConstraints(
-                options.micDeviceId, options.noiseSuppression, options.echoCancellation,
-              ),
-              video: false,
-            });
+            const opened = await openSavedMicrophone(
+              options.micDeviceId,
+              options.micLabel,
+              options.noiseSuppression,
+              options.echoCancellation,
+            );
+            mic = opened.stream;
+            if (
+              options.micDeviceId
+              && (opened.deviceId !== options.micDeviceId || opened.label !== options.micLabel)
+            ) {
+              void window.lumen.replayRememberMic(opened.deviceId, opened.label);
+            }
             if (signal.aborted) return;
             voiceTrack = mic.getAudioTracks()[0];
             if (!voiceTrack) throw new Error("No microphone.");

@@ -6,6 +6,7 @@ publish:
   provider: github
   owner: GICristian
   repo: lumen
+  releaseType: release
 files:
   - out
   - package.json

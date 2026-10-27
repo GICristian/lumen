@@ -22,6 +22,43 @@ export function replayDevice(value: unknown): string {
   return typeof value === "string" && value.length <= 512 ? value : "";
 }
 
+export function replayMicLabel(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.trim().slice(0, 256);
+}
+
+export type ListedInput = { deviceId: string; label: string; kind?: string };
+
+/**
+ * Chromium mints a new media device id on many launches. The device label does not.
+ * An id that is still listed wins. Otherwise the saved label selects the same microphone.
+ */
+export function resolveMicrophone(
+  devices: ListedInput[],
+  deviceId: string,
+  label: string,
+): { deviceId: string; label: string } {
+  const inputs = devices.filter((device) => (
+    device.deviceId
+    && device.deviceId !== "default"
+    && device.deviceId !== "communications"
+    && (!device.kind || device.kind === "audioinput")
+  ));
+  const savedId = deviceId.trim();
+  const savedLabel = label.trim();
+  const current = savedId ? inputs.find((device) => device.deviceId === savedId) : undefined;
+  if (current) {
+    return { deviceId: current.deviceId, label: current.label.trim() || savedLabel };
+  }
+  if (savedLabel) {
+    const named = inputs.find((device) => (
+      device.label.trim().toLowerCase() === savedLabel.toLowerCase()
+    ));
+    if (named) return { deviceId: named.deviceId, label: named.label.trim() };
+  }
+  return { deviceId: savedId, label: savedLabel };
+}
+
 /** Empty follows the cursor. Anything else must be a desktop-capturer screen id. */
 export function replayDisplay(value: unknown): string {
   if (typeof value !== "string") return "";
@@ -160,6 +197,19 @@ function gainFilter(base: string, gain: number): string {
   return Math.abs(gain - 1) < 0.001 ? base : `${base},volume=${gain.toFixed(3)}`;
 }
 
+/** A hold shorter than this is timestamp noise, not a frozen opening. */
+const PICTURE_HOLD = 0.2;
+
+/** The opening is a real frozen frame and has to be cut from the picture too. */
+export function pictureNeedsTrim(start: number): boolean {
+  return Number.isFinite(start) && start > PICTURE_HOLD;
+}
+
+function pictureTrim(start: number): string[] {
+  if (!pictureNeedsTrim(start)) return [];
+  return ["-vf", `trim=start=${start.toFixed(3)},setpts=PTS-STARTPTS`];
+}
+
 /** Drop the audio that plays before the first frame a player can show. */
 function pictureLead(start: number, chain: string): string {
   if (start <= 0.001) return chain;
@@ -168,8 +218,8 @@ function pictureLead(start: number, chain: string): string {
 
 /**
  * One continuous recording. `start` is how long the sound runs before the first
- * decodable frame. A straight copy writes the buffer as it was recorded.
- * A volume change is the case that has to decode the sound.
+ * decodable frame. A frozen opening is skipped with an input seek, so the
+ * picture is copied instead of encoded again. A volume change only decodes the sound.
  */
 export function buildFileSaveArgs(
   input: string,
@@ -180,15 +230,22 @@ export function buildFileSaveArgs(
   start = 0,
   systemGain = 1,
 ): string[] {
-  const args = ["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", input];
+  const trim = pictureNeedsTrim(start);
+  const seek = copy && trim;
+  const args = ["-hide_banner", "-loglevel", "error", "-nostdin", "-y"];
+  if (seek) args.push("-ss", start.toFixed(3));
+  args.push("-i", input);
   if (duration !== undefined && Number.isFinite(duration) && duration > 0) {
     args.push("-t", duration.toFixed(6));
   }
-  if (copy && Math.abs(systemGain - 1) < 0.001) {
+  const unity = Math.abs(systemGain - 1) < 0.001;
+  if (copy && unity) {
     args.push("-c", "copy", "-movflags", "+faststart", output);
     return args;
   }
-  args.push("-af", gainFilter(pictureLead(start, "aresample=48000"), systemGain));
+  if (!copy && trim) args.push(...pictureTrim(start));
+  const lead = seek ? 0 : start;
+  args.push("-af", gainFilter(pictureLead(lead, "aresample=48000"), systemGain));
   args.push(...mediaTail(copy, encoder, output, "256k", true));
   return args;
 }
@@ -213,7 +270,13 @@ export function buildFileMixSaveArgs(
   micLeadMs = 0,
   micHum = false,
 ): string[] {
-  const args = ["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", video, "-i", mic];
+  const seekVideo = copy && pictureNeedsTrim(videoStart);
+  const seekMic = copy && micStart > 0.001;
+  const args = ["-hide_banner", "-loglevel", "error", "-nostdin", "-y"];
+  if (seekVideo) args.push("-ss", videoStart.toFixed(3));
+  args.push("-i", video);
+  if (seekMic) args.push("-ss", micStart.toFixed(3));
+  args.push("-i", mic);
   if (duration !== undefined && Number.isFinite(duration) && duration > 0) args.push("-t", duration.toFixed(6));
   const shift = Math.max(-80, Math.min(80, micLeadMs));
   const voice: string[] = [];
@@ -221,11 +284,14 @@ export function buildFileMixSaveArgs(
   if (shift < -1) voice.push(`atrim=start=${(-shift / 1000).toFixed(3)}`, "asetpts=PTS-STARTPTS");
   voice.push("aresample=48000");
   if (micHum) voice.push(MIC_HUM);
-  const system = gainFilter(pictureLead(videoStart, "aresample=48000"), systemGain);
-  const micChain = gainFilter(pictureLead(micStart, voice.join(",")), micGain);
+  const videoLead = seekVideo ? 0 : videoStart;
+  const micLead = seekMic ? 0 : micStart;
+  const system = gainFilter(pictureLead(videoLead, "aresample=48000"), systemGain);
+  const micChain = gainFilter(pictureLead(micLead, voice.join(",")), micGain);
   const mix = `[0:a]${system}[sys];[1:a]${micChain}[mic];`
     + "[sys][mic]amix=inputs=2:duration=first:normalize=0:dropout_transition=0[aout]";
   args.push("-filter_complex", mix, "-map", "0:v:0", "-map", "[aout]");
+  if (!copy && pictureNeedsTrim(videoStart)) args.push(...pictureTrim(videoStart));
   args.push(...mediaTail(copy, encoder, output, "256k", true));
   return args;
 }

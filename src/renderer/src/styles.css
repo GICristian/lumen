@@ -2585,6 +2585,31 @@ button:focus-visible, input:focus-visible { outline: 2px solid color-mix(in srgb
 }
 .hub-replay-entry .ico { width:14px; height:14px; }
 .hub-replay-entry:hover { border-color:color-mix(in srgb, var(--accent) 70%, transparent); background:rgba(255,59,59,.2); }
+.hub-plugins-entry {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent-2);
+  font: inherit;
+  font-size: 13px;
+  transition: border-color 180ms ease, background 180ms ease, transform 180ms ease;
+}
+.hub-plugins-entry .ico { width: 14px; height: 14px; }
+.hub-plugins-entry:hover {
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  transform: scale(1.03);
+}
+.hub-plugins-entry.is-on {
+  border-color: color-mix(in srgb, var(--accent) 80%, transparent);
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+}
 .hub-note-entry {
   position: relative;
   -webkit-app-region: no-drag;
@@ -3208,44 +3233,90 @@ img.brand-lockup.empty-logo { width: min(380px, 58vw); margin-inline: auto; }
   font-size: 10px;
 }
 .scrub-audio.is-on { background: var(--accent); color: var(--on-accent, #171614); }
-.shot-stage { position: fixed; inset: 0; cursor: crosshair; background: rgba(0, 0, 0, 0.28); }
-.shot-stage img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; }
-.shot-dim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.35); pointer-events: none; }
+.shot-stage { position: fixed; inset: 0; cursor: crosshair; background: transparent; }
+.shot-stage img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
+.shot-dim, .shot-shade {
+  position: absolute;
+  background: rgba(8, 8, 8, 0.4);
+  pointer-events: none;
+  z-index: 1;
+}
+.shot-dim { inset: 0; }
 .shot-hole {
   position: absolute;
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
-  border: 1px solid var(--accent);
+  border: 1px solid #fff;
   background: transparent;
+  z-index: 2;
+  box-shadow: none;
 }
 .shot-hole span {
   position: absolute;
-  top: -18px;
-  left: 0;
-  color: var(--accent-2);
+  left: 6px;
+  top: 6px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
   font-size: 11px;
+  line-height: 16px;
   pointer-events: none;
 }
 .shot-draw { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-.shot-draw.is-ink { pointer-events: auto; cursor: crosshair; }
+.shot-cursor {
+  position: absolute;
+  z-index: 7;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+}
 .shot-tools {
   position: absolute;
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  z-index: 2;
-  max-width: 420px;
+  align-items: center;
+  gap: 4px;
+  z-index: 6;
+  padding: 4px;
+  pointer-events: none;
+  border-radius: 8px;
+  background: #1b1b1b;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
 }
 .shot-tools button {
-  height: 32px;
+  height: 28px;
   padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #161513;
-  color: #f4f0e8;
+  pointer-events: none;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #fff;
   font-weight: 600;
 }
 .shot-tools button.is-on,
-.shot-tools .shot-primary { background: var(--accent); color: var(--on-accent, #171614); border-color: transparent; }
+.shot-tools .shot-primary { background: #3d8bfd; color: #fff; }
+.overlay-brand {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+}
+.overlay-brand:hover { background: rgba(255, 255, 255, 0.08); }
+.overlay-clean {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-weight: 600;
+}
 .shot-swatch { width: 28px; padding: 0; }
 .shot-swatch.is-on { outline: 2px solid #fff; outline-offset: 1px; }
 .shot-hint { position: absolute; left: 16px; bottom: 16px; margin: 0; color: var(--accent-2); }

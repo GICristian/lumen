@@ -5,6 +5,7 @@ export function useClipSelection(order: string[]): {
   selected: string[];
   pick: (path: string, extend: boolean) => void;
   clear: () => void;
+  choose: (paths: string[]) => void;
 } {
   const anchor = useRef<string | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
@@ -26,5 +27,11 @@ export function useClipSelection(order: string[]): {
     setSelected([]);
   }
 
-  return { selected: visible, pick, clear };
+  function choose(paths: string[]): void {
+    const next = paths.filter((path) => order.includes(path));
+    anchor.current = next[0] ?? null;
+    setSelected(next);
+  }
+
+  return { selected: visible, pick, clear, choose };
 }

@@ -23,6 +23,7 @@ export function OverlayPreview({
   hasNext = false,
   onPrevious,
   onNext,
+  onRenamed,
 }: {
   item: FolderItem;
   onBack: () => void;
@@ -36,6 +37,7 @@ export function OverlayPreview({
   hasNext?: boolean;
   onPrevious?: () => void;
   onNext?: () => void;
+  onRenamed: (item: FolderItem) => void;
 }) {
   const video = useRef<HTMLVideoElement>(null);
   const [source, setSource] = useState<string | null>(null);
@@ -49,11 +51,16 @@ export function OverlayPreview({
   const lastVolume = useRef(volume);
   const audibleVolume = useRef(volume || 1);
   const [hover, setHover] = useState<{ ratio: number; time: number } | null>(null);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  const naming = useRef(false);
+  const skipBlur = useRef(false);
   function announce(text: string): void {
     window.clearTimeout(feedbackTimer.current); setFeedback(text);
     feedbackTimer.current = window.setTimeout(() => setFeedback(""), 1100);
   }
   useEffect(() => () => window.clearTimeout(feedbackTimer.current), []);
+  useEffect(() => { setDraft(null); }, [item.path]);
   useEffect(() => {
     const pauseWhenHidden = (): void => { if (document.hidden && video.current) pausePlayback(video.current); };
     document.addEventListener("visibilitychange", pauseWhenHidden);
@@ -76,7 +83,7 @@ export function OverlayPreview({
       if (live) setNotice(error instanceof Error ? error.message : "Clip failed to open");
     });
     return () => { live = false; };
-  }, [item.path]);
+  }, [item.path, reload]);
   useEffect(() => {
     if (video.current) video.current.volume = volume;
     if (volume > 0) audibleVolume.current = volume;
@@ -96,6 +103,28 @@ export function OverlayPreview({
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [volume, onVolume]);
+  async function commitName(raw: string): Promise<void> {
+    if (naming.current) return;
+    const next = raw.trim();
+    if (!next || next === clipTitle(item.name)) {
+      setDraft(null);
+      return;
+    }
+    naming.current = true;
+    setSource(null);
+    await new Promise((resolve) => window.setTimeout(resolve, 180));
+    try {
+      const renamed = await window.lumen.renameClip(item.path, next);
+      onRenamed(renamed);
+      setDraft(null);
+    } catch (error: unknown) {
+      setNotice(error instanceof Error ? error.message : "Clip could not be renamed");
+      setDraft(null);
+      setReload((value) => value + 1);
+    } finally {
+      naming.current = false;
+    }
+  }
   function togglePlayback(): void {
     const media = video.current;
     if (!media) return;
@@ -110,7 +139,43 @@ export function OverlayPreview({
           <Icon name="back" />
           <span>Back</span>
         </button>
-        <div className="overlay-preview-title"><span className="hub-kicker">QUICK LOOK</span><strong title={item.name}>{clipTitle(item.name)}</strong></div>
+        <div className="overlay-preview-title">
+          {draft === null ? (
+            <button
+              type="button"
+              className="clip-rename"
+              title="Rename clip"
+              onClick={() => setDraft(clipTitle(item.name))}
+            >
+              {clipTitle(item.name)}
+            </button>
+          ) : (
+            <input
+              className="clip-rename"
+              aria-label="Clip name"
+              value={draft}
+              autoFocus
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  event.currentTarget.blur();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  skipBlur.current = true;
+                  setDraft(null);
+                }
+              }}
+              onBlur={() => {
+                if (skipBlur.current) {
+                  skipBlur.current = false;
+                  return;
+                }
+                void commitName(draft);
+              }}
+            />
+          )}
+        </div>
         {onFavorite ? (
           <button
             type="button"

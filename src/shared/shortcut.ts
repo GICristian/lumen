@@ -5,6 +5,7 @@ export const DEFAULT_OVERLAY_SHORTCUT = "Ctrl+Alt+L";
 export const DEFAULT_VAULT_SHORTCUT = "Ctrl+Alt+Shift+V";
 export const DEFAULT_REPLAY_SHORTCUT = "Ctrl+Alt+Shift+R";
 export const DEFAULT_SCREENSHOT_SHORTCUT = "Ctrl+Shift+S";
+export const DEFAULT_SOUNDBOARD_SHORTCUT = "F8";
 
 const FROM_EVENT: Record<string, string> = {
   " ": "Space",
@@ -58,6 +59,10 @@ export function replayAccelerator(value: unknown): string {
 
 export function screenshotAccelerator(value: unknown): string {
   return readAccelerator(value, DEFAULT_SCREENSHOT_SHORTCUT);
+}
+
+export function soundboardAccelerator(value: unknown): string {
+  return readAccelerator(value, DEFAULT_SOUNDBOARD_SHORTCUT);
 }
 
 export function acceleratorFromEvent(event: {

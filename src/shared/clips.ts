@@ -14,6 +14,21 @@ export function clipTitle(name: string): string {
   return name.slice(0, dot);
 }
 
+const reservedStem = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+/** File name that keeps the current extension and rejects path characters. */
+export function clipFileName(currentName: string, nextTitle: string): string | null {
+  const dot = currentName.lastIndexOf(".");
+  if (dot <= 0) return null;
+  const stem = nextTitle
+    .trim()
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "")
+    .replace(/[. ]+$/g, "");
+  if (!stem || stem === "." || stem === ".." || stem.length > 180) return null;
+  if (reservedStem.test(stem)) return null;
+  return `${stem}${currentName.slice(dot)}`;
+}
+
 /** True when the file name carries Lumen's edit marker, such as clip_edit.mp4. */
 export function isEditedClip(name: string): boolean {
   const stem = clipTitle(name).toLowerCase();
