@@ -33,14 +33,12 @@ export type MacroBind = {
 const EXAMPLE = [
   "# Macro Bind",
   "macro",
-  "name=Space C",
+  "name=WoW Mount",
   "enabled=1",
-  "bind=key 67 46 0 C",
-  "step=key down 32 57 0 Space",
-  "step=wait 6.94",
-  "step=key down 67 46 0 C",
-  "step=key up 67 46 0 C",
-  "step=key up 32 57 0 Space",
+  "bind=key 84 20 0 T",
+  "step=key down 49 2 0 1",
+  "step=wait 40",
+  "step=key up 49 2 0 1",
 ].join("\n");
 
 export function exampleMacroText(): string {
@@ -202,7 +200,7 @@ function readStep(macro: MacroBind, value: string): void {
   }
 }
 
-/** Reads the Macro Bind text format. A missing file becomes the Space C example. */
+/** Reads the Macro Bind text format. A missing file becomes the WoW example. */
 export function parseMacros(text: string): MacroBind[] {
   const list: MacroBind[] = [];
   let current: MacroBind | null = null;

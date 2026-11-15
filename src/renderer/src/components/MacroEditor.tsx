@@ -138,7 +138,7 @@ export function MacroEditor() {
   const [index, setIndex] = useState(0);
   const [stepIndex, setStepIndex] = useState(0);
   const [mode, setMode] = useState<Mode>("trigger");
-  const [wait, setWait] = useState("6.94");
+  const [wait, setWait] = useState("40");
   const [timing, setTiming] = useState("");
   const [status, setStatus] = useState("");
   const macrosRef = useRef<MacroBind[]>([]);
@@ -198,7 +198,7 @@ export function MacroEditor() {
   async function save(): Promise<void> {
     const next = withTypedWait(macrosRef.current);
     if (!next) {
-      setStatus("Write the wait in milliseconds. Example: 6.94");
+      setStatus("Write the wait in milliseconds. Example: 40");
       return;
     }
     const ok = await commit(next);
@@ -295,7 +295,7 @@ export function MacroEditor() {
     if (!macro) return;
     const milliseconds = Number(wait);
     if (!Number.isFinite(milliseconds) || milliseconds < 0) {
-      setStatus("Write the wait in milliseconds. Example: 6.94");
+      setStatus("Write the wait in milliseconds. Example: 40");
       return;
     }
     const at = stepIndex < 0 || stepIndex >= macro.steps.length
